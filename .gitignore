@@ -2,3 +2,6 @@
 stockfish
 __pycache__
 venv
+.venv/
+agent.md
+# Local AI agent notes
