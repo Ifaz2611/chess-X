@@ -145,7 +145,7 @@ chess-X/
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 
@@ -159,7 +159,7 @@ chess-X/
 
 ```bash
 # 1. Clone (or download ZIP)
-git clone https://github.com/ifaz2611/chess-X.git
+git clone https://github.com/Ifaz2611/chess-X
 cd chess-X   
 
 # 2. Create virtual environment
