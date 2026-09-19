@@ -5,6 +5,7 @@ import atexit
 import signal
 import logging
 import tempfile
+import datetime
 import multiprocess
 import threading
 import time
@@ -81,10 +82,12 @@ class GUI:
         self.restart_after_stopping = False
         self.match_moves = []
         self._overlay_queue = None
+        self._export_counter = 0
+        self._last_export_dir = None
 
         master.title("CHESS-X  —  Stockfish Bot")
-        master.geometry("895x785")
-        master.minsize(895, 785)
+        master.geometry("895x830")
+        master.minsize(895, 830)
         try:
             # keep reference so image doesn't get GC'd
             self._pawn_img = tk.PhotoImage(file="src/assets/pawn_32x32.png")
@@ -185,10 +188,35 @@ class GUI:
         # status_text lives inside pill so pipe handlers still work via fg/bg
         self.status_text = tk.Label(pill_inner, text="INACTIVE", font=("Segoe UI", 7, "bold"), fg=DANGER, bg=DANGER_BG)
         self.status_text.pack(side="left")
-        tk.Label(h_right, text="Press  1 ▶ Start   2 ■ Stop   3 ↻ Move", font=("Segoe UI", 7), fg=TEXT_MUTED, bg=BG_CARD).pack(anchor="e", pady=(6,0))
+        tk.Label(h_right, text="Press  1 ▶ Start   2 ■ Stop   3 ↻ Move   Esc ☠ Kill", font=("Segoe UI", 7), fg=TEXT_MUTED, bg=BG_CARD).pack(anchor="e", pady=(6,0))
 
         # hairline under header
         tk.Frame(master, bg=BORDER, height=1).pack(fill="x", side="top")
+
+        # ── Emergency kill bar — always visible at bottom, hard-kills everything ──
+        kill_bar = tk.Frame(master, bg=DANGER_BG, highlightbackground="#4A151A", highlightthickness=1)
+        kill_bar.pack(side="bottom", fill="x", padx=12, pady=(0, 8))
+        kill_inner = tk.Frame(kill_bar, bg=DANGER_BG)
+        kill_inner.pack(fill="x", padx=8, pady=7)
+        tk.Label(kill_inner, text="⚠  Emergency:", font=("Segoe UI", 7, "bold"), fg=DANGER, bg=DANGER_BG).pack(side="left")
+        tk.Label(kill_inner, text="instantly kills bot + overlay + browser", font=("Segoe UI", 7), fg="#FCA5A5", bg=DANGER_BG).pack(side="left", padx=(4, 0))
+        self.emergency_kill_button = tk.Button(kill_inner, text="☠  EMERGENCY KILL", command=self.emergency_kill,
+                                               font=("Segoe UI", 9, "bold"), fg="#FFFFFF", bg=DANGER, activebackground="#B91C1C",
+                                               activeforeground="#FFFFFF", relief="flat", bd=0, padx=14, pady=5, cursor="hand2", highlightthickness=0)
+        self.emergency_kill_button.pack(side="right")
+        def _hover_kill(e, enter):
+            try: self.emergency_kill_button.configure(bg="#B91C1C" if enter else DANGER)
+            except: pass
+        self.emergency_kill_button.bind("<Enter>", lambda e: _hover_kill(e, True))
+        self.emergency_kill_button.bind("<Leave>", lambda e: _hover_kill(e, False))
+        # keyboard shortcuts for emergency kill (Esc / F12 / Ctrl+Q) even when focus is in entry
+        try:
+            master.bind("<Escape>", lambda e: self.emergency_kill())
+            master.bind("<F12>", lambda e: self.emergency_kill())
+            master.bind("<Control-q>", lambda e: self.emergency_kill())
+            master.bind("<Control-Q>", lambda e: self.emergency_kill())
+        except Exception:
+            pass
 
         # ═══════════════════════════════════════════════════
         #  BODY
@@ -875,6 +903,92 @@ class GUI:
         except Exception as e:
             logger.debug("schedule force exit failed: %s", e)
 
+    def emergency_kill(self):
+        """Emergency hard-kill: immediately terminate bot, overlay, browser and exit process."""
+        logger.critical("EMERGENCY KILL triggered by user")
+        self.exit = True
+        # visual feedback
+        try:
+            self.emergency_kill_button.configure(text="☠ KILLING...", state="disabled", bg="#7F1D1D")
+            self.emergency_kill_button.update_idletasks()
+        except Exception:
+            pass
+        try:
+            self._set_status("KILLED", "#FFFFFF", "#7F1D1D")
+        except Exception:
+            pass
+        # hard-kill child processes without graceful join
+        for proc_attr in ("stockfish_bot_process", "overlay_screen_process"):
+            try:
+                proc = getattr(self, proc_attr, None)
+                if proc is not None:
+                    try:
+                        if hasattr(proc, "is_alive") and proc.is_alive():
+                            try:
+                                proc.kill()
+                            except Exception:
+                                try:
+                                    proc.terminate()
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                    setattr(self, proc_attr, None)
+            except Exception as e:
+                logger.debug("emergency kill %s error: %s", proc_attr, e)
+        # close pipes / queues immediately
+        try:
+            if getattr(self, "stockfish_bot_pipe", None) is not None:
+                try:
+                    self.stockfish_bot_pipe.close()
+                except Exception:
+                    pass
+                self.stockfish_bot_pipe = None
+        except Exception:
+            pass
+        try:
+            if getattr(self, "_overlay_queue", None) is not None:
+                try:
+                    self._overlay_queue.close()
+                    self._overlay_queue.cancel_join_thread()
+                except Exception:
+                    pass
+                self._overlay_queue = None
+        except Exception:
+            pass
+        # quit chrome hard
+        try:
+            if getattr(self, "chrome", None) is not None:
+                try:
+                    self.chrome.quit()
+                except Exception:
+                    pass
+                self.chrome = None
+        except Exception:
+            pass
+        self.running = False
+        self.opened_browser = False
+        self.opening_browser = False
+        # destroy window
+        try:
+            self.master.destroy()
+        except Exception:
+            pass
+        # force exit bypassing atexit delays - ensures no zombie
+        try:
+            os._exit(1)
+        except Exception:
+            pass
+        try:
+            sys.exit(1)
+        except SystemExit:
+            raise
+        except Exception:
+            try:
+                os._exit(1)
+            except Exception:
+                pass
+
     def process_checker_thread(self):
         while not self.exit:
             if self.running and self.stockfish_bot_process is not None and not self.stockfish_bot_process.is_alive():
@@ -1066,11 +1180,22 @@ class GUI:
     def keypress_listener_thread(self):
         while not self.exit:
             time.sleep(0.1)
-            if not self.opened_browser:
-                continue
             if _kb is None:
                 continue
             try:
+                # Emergency kill - works even without browser open
+                try:
+                    if _kb.is_pressed("esc") or _kb.is_pressed("f12"):
+                        try:
+                            self.master.after(0, self.emergency_kill)
+                        except Exception:
+                            self.emergency_kill()
+                        time.sleep(0.5)
+                        continue
+                except Exception:
+                    pass
+                if not self.opened_browser:
+                    continue
                 if _kb.is_pressed("1"):
                     try:
                         self.master.after(0, self.on_start_button_listener)
@@ -1439,6 +1564,17 @@ class GUI:
         except Exception:
             pass
 
+    def _unique_pgn_initialfile(self):
+        """Generate a unique PGN filename for every export click (timestamp + counter)."""
+        try:
+            self._export_counter += 1
+        except Exception:
+            self._export_counter = 1
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # use milliseconds to avoid collision within same second rapid clicks
+        ms = datetime.datetime.now().strftime("%f")[:3]
+        return f"match_{ts}_{ms}_{self._export_counter:02d}.pgn"
+
     def on_export_pgn_button_listener(self):
         # Disable topmost so dialog is visible (fixes hidden dialog bug)
         was_topmost = bool(self.enable_topmost.get())
@@ -1446,16 +1582,41 @@ class GUI:
             self.master.attributes("-topmost", False)
         except Exception:
             pass
+        # unique filename every click - fixes bug where export.pgn always overwrote same file
+        initial = self._unique_pgn_initialfile()
+        initial_dir = self._last_export_dir if self._last_export_dir and os.path.isdir(self._last_export_dir) else None
         try:
-            f = filedialog.asksaveasfile(parent=self.master, initialfile="match.pgn", defaultextension=".pgn", filetypes=[("Portable Game Notation", "*.pgn"), ("All Files", "*.*")])
+            # use asksaveasfilename so we can enforce unique name if file exists
+            path = filedialog.asksaveasfilename(parent=self.master, initialfile=initial, initialdir=initial_dir,
+                                                defaultextension=".pgn", filetypes=[("Portable Game Notation", "*.pgn"), ("All Files", "*.*")])
         finally:
             try:
                 if was_topmost:
                     self.master.attributes("-topmost", True)
             except Exception:
                 pass
-        if f is None:
+        if not path:
             return
+        # remember dir for next time
+        try:
+            self._last_export_dir = os.path.dirname(os.path.abspath(path)) or self._last_export_dir
+        except Exception:
+            pass
+        # ensure no overwrite: if file exists, append _1, _2 ...
+        if os.path.exists(path):
+            base, ext = os.path.splitext(path)
+            # if extension missing, assume .pgn
+            if not ext:
+                ext = ".pgn"
+                path = base + ext
+                base, ext = os.path.splitext(path)
+            n = 1
+            new_path = f"{base}_{n}{ext}"
+            while os.path.exists(new_path):
+                n += 1
+                new_path = f"{base}_{n}{ext}"
+            path = new_path
+            logger.info("Export file exists, using unique fallback: %s", path)
         data = ""
         for i in range(len(self.match_moves) // 2 + 1):
             if len(self.match_moves) % 2 == 0 and i == len(self.match_moves) // 2:
@@ -1465,8 +1626,9 @@ class GUI:
             if (i * 2) + 1 < len(self.match_moves):
                 data += self.match_moves[i * 2 + 1] + " "
         try:
-            f.write(data)
-            f.close()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(data)
+            logger.info("PGN exported to %s", path)
         except Exception as e:
             logger.error("PGN write failed: %s", e)
             messagebox.showerror("Error", f"Failed to write PGN: {e}")
