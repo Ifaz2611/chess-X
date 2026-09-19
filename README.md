@@ -312,7 +312,7 @@ This project is for **educational and research purposes only**. The authors do n
 
 ## License
 
-**MIT** — Copyright (c) 2022 Panagiotis Iatrou. See [LICENSE](LICENSE).
+**MIT** — Copyright (c) 2026 Ifaz Md Zahin See [LICENSE](LICENSE).
 
 ---
 
