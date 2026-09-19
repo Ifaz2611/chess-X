@@ -1,4 +1,4 @@
-# Chess-X ♟️
+﻿# Chess-X ♟️
 
 > **Automated Stockfish-powered bot for chess.com and lichess.org — with GUI, overlay, and mouse automation.**
 
