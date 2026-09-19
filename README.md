@@ -7,16 +7,6 @@ Chess-X watches the browser board, queries **Stockfish** for the best move via `
 > [!CAUTION]
 > **Educational use only.** Using this bot to cheat on chess.com or lichess.org violates their Terms of Service and will result in account bans. The authors do not condone cheating. Use it against bots, in casual analysis, puzzles, or on your own boards only. See [Disclaimer](#-disclaimer).
 
----
-
-<p align="center">
-  <img src="match_chesscom.gif" alt="Chess.com demo" width="48%" />
-  <img src="match_lichess.gif" alt="Lichess demo" width="48%" />
-  <br/>
-  <em>Mouse moves are automated by Python — no human input during bot play</em>
-</p>
-
----
 
 ## Table of Contents
 
