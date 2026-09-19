@@ -126,8 +126,6 @@ chess-X/
 │       └── pawn_32x32.png          # Window icon
 ├── requirements.txt
 ├── run.bat                         # venv\Scripts\python.exe src\gui.py
-├── match_chesscom.gif
-├── match_lichess.gif
 ├── TODO.md                         # Roadmap & improvement backlog
 ├── LICENSE                         # MIT
 └── README.md
