@@ -1,9 +1,16 @@
 import math
 import sys
 import threading
+import logging
 from PyQt6.QtCore import Qt, QPoint, QRect
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QGuiApplication, QPolygon, QFont
 from PyQt6.QtWidgets import QApplication, QWidget
+
+try:
+    from utilities import get_logger
+    logger = get_logger("overlay")
+except Exception:
+    logger = logging.getLogger("overlay")
 
 
 class OverlayScreen(QWidget):
@@ -41,8 +48,8 @@ class OverlayScreen(QWidget):
         self.eval_bar_y = (self.height() - self.eval_bar_height) // 2  # Default y position
         self.eval_bar_margin = 15  # Margin between board and eval bar
 
-        # Start the message queue thread
-        self.message_queue_thread = threading.Thread(target=self.message_queue_thread)
+        # Start the message queue thread (daemon so overlay can exit cleanly)
+        self.message_queue_thread = threading.Thread(target=self.message_queue_thread, daemon=True)
         self.message_queue_thread.start()
 
     def message_queue_thread(self):
@@ -256,6 +263,8 @@ class OverlayScreen(QWidget):
 
             # Normalize the vector
             leng = math.sqrt(dx ** 2 + dy ** 2)
+            if leng == 0:
+                return QPolygon([start_point, end_point])
             norm_x, norm_y = dx / leng, dy / leng
 
             # Get the perpendicular vector
@@ -280,7 +289,8 @@ class OverlayScreen(QWidget):
 
             return QPolygon([end_point, point2, mid_point1, start_right, start_left, mid_point2, point3])
         except Exception as e:
-            print(e)
+            logger.debug("get_arrow_polygon error: %s", e, exc_info=True)
+            return QPolygon([start_point, end_point])
 
 
 def run(stockfish_queue):

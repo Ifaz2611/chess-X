@@ -8,14 +8,16 @@ Legend: `P0` = blocking / high-value, `P1` = important, `P2` = useful, `P3` = po
 
 ## 1. Stability & Bug Fixes (P0)
 
-- [ ] **Fix brittle XPath selectors** — chess.com & lichess DOM changes break `get_board()` / `get_move_list()` frequently. Replace hard XPaths with resilient CSS selectors + fallback chains + `WebDriverWait` (`selenium.webdriver.support.ui`). Add selector health-check on startup. `P0` `M` `grabber`
-- [ ] **Handle stale / detached DOM** — `StaleElementReferenceException` not caught in `chesscom_grabber.py:get_move_list` and `lichess_grabber.py`. Wrap board & move reads in retry with exponential backoff. `P0` `S` `grabber`
-- [ ] **Robust new-game detection** — `data-processed` + `moves_list` reset is race-prone (rematch, abort, takeback). Reconcile board FEN via `chess.Board` vs DOM each poll; clear overlay queue on reset. `P0` `M` `engine`
-- [ ] **Fix Linux permissions / keyboard hook** — document + auto-detect `input` group / `sudo` need; fallback to `pynput` if `keyboard` fails. Handle Wayland (`PyAutoGUI` + `overlay` unsupported). `P0` `S` `platform`
-- [ ] **Graceful shutdown & zombie processes** — `StockfishBot` + overlay can linger after GUI close (`on_close_listener`). Ensure `atexit` + `signal` handlers kill children, close Pipes, `stockfish` subprocess, and `chrome.quit()`. `P0` `S` `core`
-- [ ] **Surface engine & Selenium errors** — `stockfish_bot.py:354` swallows exceptions with `print`. Pipe them to GUI `messagebox` + log file. Add `ERR_TIMEOUT`, `ERR_DISCONNECT` codes. `P0` `S` `core`
-- [ ] **Promotion edge cases** — underpromotion UI (`n/r/b`) relies on `move[2]+str(int(move[3])-N)` which breaks for black promotions. Test all 4 promotion types for both colors. `P0` `S` `engine`
-- [ ] **Pinned dependency updates** — `selenium 4.9.1` (2023), `chess 1.10.0`, `stockfish 3.28.0` are EOL. Bump to latest, adapt breaking changes (`Service`, `desired_capabilities` removed, `attach_to_session` patch fragile). `P0` `M` `deps`
+- [x] **Fix brittle XPath selectors** — chess.com & lichess DOM changes break `get_board()` / `get_move_list()` frequently. Replace hard XPaths with resilient CSS selectors + fallback chains + `WebDriverWait` (`selenium.webdriver.support.ui`). Add selector health-check on startup. `P0` `M` `grabber`
+- [x] **Handle stale / detached DOM** — `StaleElementReferenceException` not caught in `chesscom_grabber.py:get_move_list` and `lichess_grabber.py`. Wrap board & move reads in retry with exponential backoff. `P0` `S` `grabber`
+- [x] **Robust new-game detection** — `data-processed` + `moves_list` reset is race-prone (rematch, abort, takeback). Reconcile board FEN via `chess.Board` vs DOM each poll; clear overlay queue on reset. `P0` `M` `engine`
+- [x] **Fix Linux permissions / keyboard hook** — document + auto-detect `input` group / `sudo` need; fallback to `pynput` if `keyboard` fails. Handle Wayland (`PyAutoGUI` + `overlay` unsupported). `P0` `S` `platform`
+- [x] **Graceful shutdown & zombie processes** — `StockfishBot` + overlay can linger after GUI close (`on_close_listener`). Ensure `atexit` + `signal` handlers kill children, close Pipes, `stockfish` subprocess, and `chrome.quit()`. `P0` `S` `core`
+- [x] **Surface engine & Selenium errors** — `stockfish_bot.py:354` swallows exceptions with `print`. Pipe them to GUI `messagebox` + log file. Add `ERR_TIMEOUT`, `ERR_DISCONNECT` codes. `P0` `S` `core`
+- [x] **Promotion edge cases** — underpromotion UI (`n/r/b`) relies on `move[2]+str(int(move[3])-N)` which breaks for black promotions. Test all 4 promotion types for both colors. `P0` `S` `engine`
+- [x] **Pinned dependency updates** — `selenium 4.9.1` (2023), `chess 1.10.0`, `stockfish 3.28.0` are EOL. Bump to latest, adapt breaking changes (`Service`, `desired_capabilities` removed, `attach_to_session` patch fragile). `P0` `M` `deps`
+
+-=======================================
 
 ## 2. Anti-Detection & Humanization (P1 — use responsibly, for vs-bot / analysis only)
 

@@ -5,3 +5,5 @@ venv
 .venv/
 agent.md
 # Local AI agent notes
+chess-x.log
+config.json
