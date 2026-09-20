@@ -4,14 +4,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from unittest.mock import MagicMock, patch
 
 def test_config_roundtrip(tmp_path, monkeypatch):
-    # Create temp config file
     cfg_path = tmp_path / "config.json"
-    # Patch _config_path to use tmp
     import gui as gui_module
-    # We can't easily instantiate GUI without Tk; test _load_config/_save_config logic via isolated class
-    # Create minimal mock GUI object with needed methods
 
-    # Simulate config data
     data = {
         "stockfish_path": "",
         "website": "lichess",
@@ -29,17 +24,12 @@ def test_config_roundtrip(tmp_path, monkeypatch):
     with open(cfg_path, "w") as f:
         json.dump(data, f)
 
-    # Patch os.path.join to return our tmp path for config
-    # Instead directly test load via function mocking
-    # Create a dummy instance that has _is_valid_stockfish and _config_path
     class Dummy:
         def _is_valid_stockfish(self, p, quick_check=True): return True
         def _config_path(self): return str(cfg_path)
 
-    # Borrow methods from GUI class
     from gui import GUI
     dummy = Dummy()
-    # bind methods
     import types
     dummy._load_config = types.MethodType(GUI._load_config, dummy)
     dummy._save_config = types.MethodType(GUI._save_config, dummy)
@@ -49,8 +39,6 @@ def test_config_roundtrip(tmp_path, monkeypatch):
     assert loaded["skill_level"] == 10
     assert loaded["mouse_latency"] == 1.5
 
-    # Modify and save
-    # Setup vars as dummy attributes with .get() interface
     class Var:
         def __init__(self, v): self._v = v
         def get(self): return self._v
