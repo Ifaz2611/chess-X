@@ -15,7 +15,6 @@ from selenium.common import WebDriverException
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 
-from overlay import run
 from stockfish_bot import StockfishBot
 from utilities import check_linux_input_permissions, get_keyboard_handler, get_logger, is_wayland
 
@@ -1121,7 +1120,10 @@ class GUI:
             self.skill_level.get(), self.stockfish_depth.get(), self.memory.get(), self.cpu_threads.get(),
         )
         self.stockfish_bot_process.start()
-        self.overlay_screen_process = multiprocess.Process(target=run, args=(st_ov_queue,))
+        # Lazy import overlay so importing gui (e.g. in tests) does not require PyQt6 / EGL
+        from overlay import run as overlay_run
+
+        self.overlay_screen_process = multiprocess.Process(target=overlay_run, args=(st_ov_queue,))
         self.overlay_screen_process.start()
         self.running = True
         try:
