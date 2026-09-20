@@ -4,6 +4,12 @@
 
 Chess-X watches the browser board, queries **Stockfish** for the best move via `python-chess`, and plays it automatically using `PyAutoGUI` / mouseless WebSocket injection. Built for education and local analysis — **not for cheating in rated online games.**
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Stockfish](https://img.shields.io/badge/engine-Stockfish-green.svg)](https://stockfishchess.org/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 > [!CAUTION]
 > **Educational use only.** Using this bot to cheat on chess.com or lichess.org violates their Terms of Service and will result in account bans. The authors do not condone cheating. Use it against bots, in casual analysis, puzzles, or on your own boards only. See [Disclaimer](#-disclaimer).
 
@@ -12,17 +18,27 @@ Chess-X watches the browser board, queries **Stockfish** for the best move via `
 
 - [How It Works](#-how-it-works)
 - [Features](#-features)
+- [Screenshots / Demo](#-screenshots--demo)
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
 - [Installation](#-installation)
+- [Quick Start](#-quick-start)
 - [Usage](#-usage)
+- [Configuration](#-configuration)
 - [GUI Reference](#-gui-reference)
 - [Stockfish Parameters Explained](#-stockfish-parameters-explained)
 - [Keyboard Shortcuts](#-keyboard-shortcuts)
 - [Overlay & Evaluation Display](#-overlay--evaluation-display)
 - [Troubleshooting](#-troubleshooting)
+- [FAQ](#-faq)
 - [Roadmap](#-roadmap)
+- [Development](#-development)
+- [Testing](#-testing)
 - [Contributing](#-contributing)
+- [Security & Fair Play](#-security--fair-play)
+- [Acknowledgements](#-acknowledgements)
+- [Changelog](#-changelog)
+- [Support](#-support)
 - [Disclaimer](#-disclaimer)
 - [License](#-license)
 
@@ -90,6 +106,23 @@ Chess-X watches the browser board, queries **Stockfish** for the best move via `
 
 ---
 
+## Screenshots / Demo
+
+> Add your own screenshots or GIFs here. Suggested files:
+> `docs/screenshots/gui.png`, `docs/screenshots/overlay.png`,
+> `docs/screenshots/chesscom.gif`, `docs/screenshots/lichess-mouseless.gif`.
+
+| Preview | What it shows |
+|---|---|
+| `docs/screenshots/gui.png` | Main Tkinter control panel with engine settings, move list, and live evaluation labels. |
+| `docs/screenshots/overlay.png` | Transparent PyQt6 overlay with best-move arrow and vertical evaluation bar. |
+| `docs/screenshots/chesscom.gif` | Bot playing a casual game or puzzle on chess.com. |
+| `docs/screenshots/lichess-mouseless.gif` | Lichess mouseless mode running while the browser is minimized. |
+
+If you do not have screenshots yet, remove this section or replace the paths with real images/GIFs.
+
+---
+
 ## 🛠 Tech Stack
 
 | Layer | Library | Version | Purpose |
@@ -124,6 +157,8 @@ chess-X/
 │   │   └── lichess_grabber.py      # lichess DOM + WebSocket mouseless + puzzle detection
 │   └── assets/
 │       └── pawn_32x32.png          # Window icon
+├── docs/
+│   └── screenshots/                # README images/GIFs (optional, add your own)
 ├── requirements.txt
 ├── run.bat                         # venv\Scripts\python.exe src\gui.py
 ├── TODO.md                         # Roadmap & improvement backlog
@@ -175,6 +210,32 @@ run.bat
 
 ---
 
+## Quick Start
+
+```bash
+git clone https://github.com/Ifaz2611/chess-X
+cd chess-X
+python -m venv venv
+
+# Windows
+venv\Scripts\pip.exe install -r requirements.txt
+venv\Scripts\python.exe src\gui.py
+
+# Linux / macOS
+venv/bin/pip install -r requirements.txt
+venv/bin/python3 src/gui.py
+```
+
+Then:
+
+1. Click **Select Stockfish** and choose your Stockfish binary.
+2. Choose **Chess.com** or **Lichess.org**.
+3. Click **Open Browser**.
+4. Navigate to a casual game, bot game, analysis board, or Lichess puzzle.
+5. Click **Start** or press `1`.
+
+---
+
 ## Usage
 
 1.  Run `src/gui.py` — the control panel appears (always on top by default).
@@ -188,6 +249,39 @@ run.bat
 9.  Press **Stop** (or `2`) to pause at any time. Re-press `Start`/`1` to resume.
 
 **PGN Export:** After/during a game, click **Export PGN** → save `match.pgn` (SAN notation).
+
+---
+
+## Configuration
+
+Chess-X is currently configured entirely through the Tkinter GUI. Settings are not persisted between restarts.
+
+| Setting | Where | Persisted? | Notes |
+|---|---|---|---|
+| Stockfish path | `Select Stockfish` button | No | File picker, must be executable |
+| Site | `Chess.com` / `Lichess.org` radio | No | Determines grabber class |
+| Manual Mode | Checkbox | No | Requires `3` to execute |
+| Mouseless Mode | Checkbox | No | Lichess only |
+| Non-stop puzzles | Checkbox | No | Lichess only |
+| Non-stop online matches | Checkbox | No | Lichess only |
+| Bongcloud | Checkbox | No | Forces `e3/e6/Ke2/Ke7` if legal |
+| Mouse Latency | Slider | No | `0.0`–`15.0` seconds |
+| Skill Level | Slider | No | `0`–`20` |
+| Depth | Slider | No | `1`–`20` |
+| Memory | Entry | No | Stockfish `Hash` in MB |
+| CPU Threads | Entry | No | Stockfish `Threads` |
+| Slow Mover | Entry | No | `10`–`1000` |
+| Always on top | Checkbox | No | Tkinter `-topmost` |
+
+Planned configuration persistence is tracked in [TODO.md](TODO.md). Until then, restarting the app resets settings to defaults.
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `QT_QPA_PLATFORM` | system default | Set to `xcb` if the PyQt6 overlay fails on Wayland |
+| `CHROME_BIN` | auto-detected | Optional Chrome/Chromium binary override |
+| `STOCKFISH_PATH` | GUI-selected | Optional default Stockfish path, if implemented in your fork |
 
 ---
 
@@ -274,6 +368,34 @@ run.bat
 
 ---
 
+## FAQ
+
+**Q: Is Chess-X allowed on chess.com or lichess.org?**  
+No. Using it in rated or casual online games against humans violates both platforms' fair-play policies. Use it only against bots, in local analysis, puzzles, or private boards.
+
+**Q: Can I use this against human opponents?**  
+No. The project is for education and local analysis. Cheating will get your account banned.
+
+**Q: Why is macOS untested?**  
+The current automation stack, global hotkeys, and overlay behavior are verified on Windows and Linux. macOS may require extra permissions for screen recording, accessibility, and global keyboard hooks.
+
+**Q: Why does the bot miss a move or play the wrong square?**  
+Common causes: browser zoom, DPI scaling, multi-monitor offsets, stale DOM selectors, or a board flip. Set display scaling to 100%, keep the board visible, and verify the grabber selectors.
+
+**Q: How do I add support for another chess site?**  
+Create a new grabber by subclassing the abstract `Grabber` in `src/grabbers/grabber.py`, implement board/move/color/game-over detection, and wire it into the GUI radio options.
+
+**Q: Are settings saved between restarts?**  
+Not yet. Configuration persistence is planned. Until then, all GUI settings reset when the app closes.
+
+**Q: Why does Stockfish take so long to move?**  
+Check `Depth`, `Slow Mover`, `Threads`, and `Mouse Latency`. Higher depth and slow-mover values increase think time. For faster play, lower `Depth` to `10–12` and `Slow Mover` to `50–80`.
+
+**Q: Can I run this headless?**  
+Not officially yet. Headless/Docker support is on the roadmap, but DOM scraping and mouse automation currently assume a visible browser.
+
+---
+
 ## Roadmap
 
 See **[TODO.md](TODO.md)** for the full prioritized backlog (humanization, cross-site parity, GUI modernization, testing, CI, and more).
@@ -290,6 +412,66 @@ Contributions welcome — pick an item from `TODO.md`, open an issue, and submit
 
 ---
 
+## Development
+
+### Setup
+
+```bash
+git clone https://github.com/Ifaz2611/chess-X
+cd chess-X
+python -m venv venv
+
+# Windows
+venv\Scripts\pip.exe install -r requirements.txt
+
+# Linux / macOS
+venv/bin/pip install -r requirements.txt
+```
+
+### Run from source
+
+```bash
+# Windows
+venv\Scripts\python.exe src\gui.py
+
+# Linux / macOS
+venv/bin/python3 src/gui.py
+```
+
+### Recommended developer tools
+
+Planned/optional tooling:
+
+- `ruff` — linting and import sorting
+- `black` — formatting
+- `pytest` — unit/integration tests
+- `pre-commit` — local hooks
+- `mypy` — optional type checking
+
+Keep changes focused, test on both sites when touching grabbers, and update `README.md` / `TODO.md` for user-facing changes.
+
+---
+
+## Testing
+
+Automated tests are not yet included. Current testing is manual:
+
+1. Launch a local or bot game on chess.com and lichess.org.
+2. Verify board detection, color detection, move list parsing, and game-over detection.
+3. Test Manual Mode, Mouseless Mode (Lichess), Bongcloud, PGN export, and overlay rendering.
+4. Check promotion, castling, en passant, and board-flip handling.
+
+Planned test matrix:
+
+- OS: Windows, Linux
+- Python: 3.10, 3.11, 3.12
+- Site: chess.com, lichess.org
+- Modes: normal, manual, mouseless, puzzle, non-stop
+
+See [TODO.md](TODO.md) for testing tasks.
+
+---
+
 ## Contributing
 
 1. Fork → create feature branch (`git checkout -b feat/human-delays`).
@@ -297,6 +479,57 @@ Contributions welcome — pick an item from `TODO.md`, open an issue, and submit
 3. Test on both sites if touching grabbers.
 4. Update `README.md` / `TODO.md` if adding features.
 5. Open PR with screenshots/GIFs for UI changes.
+
+---
+
+## Security & Fair Play
+
+- **Do not use Chess-X in rated online games.** It violates chess.com's Fair Play Policy and lichess.org's Terms of Service.
+- Use it only against computer opponents, in casual analysis, on puzzles, or on private boards.
+- If you publish analysis generated with this tool, disclose the engine assistance.
+- Report security issues privately to the maintainers instead of opening a public exploit issue.
+- Respect the platforms, their users, and the spirit of fair play.
+
+Fair-play resources:
+
+- chess.com Fair Play Policy
+- lichess.org Terms of Service
+- Stockfish license and contribution guidelines
+
+---
+
+## Acknowledgements
+
+Chess-X stands on the shoulders of excellent open-source projects:
+
+- [Stockfish](https://stockfishchess.org/) — the chess engine
+- [python-chess](https://python-chess.readthedocs.io/) — board representation, SAN/UCI handling
+- [Selenium](https://www.selenium.dev/) — browser automation
+- [webdriver-manager](https://github.com/SergeyPirogov/webdriver_manager) — driver management
+- [PyAutoGUI](https://pyautogui.readthedocs.io/) — mouse automation
+- [keyboard](https://github.com/boppreh/keyboard) — global hotkeys
+- [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) — transparent overlay
+- [Tkinter](https://docs.python.org/3/library/tkinter.html) — control GUI
+- [multiprocess](https://github.com/uqfoundation/multiprocess) — IPC helpers
+
+Thanks to all contributors, testers, and everyone who reports bugs or suggests improvements.
+
+---
+
+## Changelog
+
+See [GitHub Releases](https://github.com/Ifaz2611/chess-X/releases) for version history.
+
+For a detailed backlog and upcoming changes, see [TODO.md](TODO.md).
+
+---
+
+## Support
+
+- Open an issue for bugs or feature requests.
+- Use GitHub Discussions (if enabled) for questions and ideas.
+- Include your OS, Python version, browser version, Stockfish version, and relevant logs when reporting problems.
+- Star ⭐ the repo if you found it useful.
 
 ---
 
