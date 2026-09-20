@@ -1,4 +1,5 @@
 import atexit
+import datetime
 import os
 import platform
 import signal
@@ -34,22 +35,22 @@ _ok, _msg = check_linux_input_permissions()
 if not _ok:
     logger.warning(_msg)
 
-BG_BASE = "#0B0F14"
-BG_CARD = "#151B23"
-BG_INPUT = "#1E2A3A"
-BG_ELEVATED = "#232E3C"
-BORDER = "#263447"
-TEXT_PRIMARY = "#F1F5F9"
-TEXT_SECONDARY = "#A6B3C5"
-TEXT_MUTED = "#708096"
-ACCENT = "#8B5CF6"
-ACCENT_HI = "#7C3AED"
-CYAN = "#06B6D4"
-SUCCESS = "#10B981"
-SUCCESS_BG = "#052E1C"
-DANGER = "#EF4444"
-DANGER_BG = "#2E0D12"
-WARNING = "#F59E0B"
+BG_BASE = "#F4F1EA"
+BG_CARD = "#FFFFFF"
+BG_INPUT = "#FAF8F4"
+BG_ELEVATED = "#ECE7DE"
+BORDER = "#D7D0C4"
+TEXT_PRIMARY = "#000000"
+TEXT_SECONDARY = "#000000"
+TEXT_MUTED = "#050505"
+ACCENT = "#B85C35"
+ACCENT_HI = "#974923"
+CYAN = "#3F7180"
+SUCCESS = "#2E7D5B"
+SUCCESS_BG = "#E6F2EC"
+DANGER = "#B54747"
+DANGER_BG = "#F8E9E7"
+WARNING = "#B7832F"
 
 
 class GUI:
@@ -81,8 +82,8 @@ class GUI:
         self._last_export_dir = None
 
         master.title("CHESS-X · Stockfish Bot")
-        master.geometry("980x700")
-        master.minsize(760, 560)
+        master.geometry("1120x760")
+        master.minsize(900, 620)
         master.configure(bg=BG_BASE)
         master.protocol("WM_DELETE_WINDOW", self.on_close_listener)
         try:
@@ -100,7 +101,7 @@ class GUI:
         except Exception:
             pass
 
-        self.F_TITLE = tkFont.Font(family="Segoe UI", size=15, weight="bold")
+        self.F_TITLE = tkFont.Font(family="Segoe UI", size=17, weight="bold")
         self.F_LABEL = tkFont.Font(family="Segoe UI", size=9)
         self.F_VALUE = tkFont.Font(family="Consolas", size=10, weight="bold")
         self.F_BUTTON = tkFont.Font(family="Segoe UI", size=9, weight="bold")
@@ -114,11 +115,11 @@ class GUI:
         style.configure("Treeview", background=BG_CARD, fieldbackground=BG_CARD,
                         foreground=TEXT_PRIMARY, rowheight=28, borderwidth=0,
                         font=("Segoe UI", 9))
-        style.configure("Treeview.Heading", background=BG_ELEVATED,
-                        foreground=TEXT_SECONDARY, relief="flat",
+        style.configure("Treeview.Heading", background="#E6E0D7",
+                        foreground="#505966", relief="flat",
                         font=("Segoe UI", 9, "bold"))
-        style.map("Treeview", background=[("selected", "#3B2A68")])
-        style.configure("Dark.Vertical.TScrollbar", background=BG_ELEVATED,
+        style.map("Treeview", background=[("selected", "#E8D7CC")], foreground=[("selected", TEXT_PRIMARY)])
+        style.configure("Dark.Vertical.TScrollbar", background="#D1C8BB",
                         troughcolor=BG_BASE, borderwidth=0, arrowsize=12)
 
         self._build_header()
@@ -128,12 +129,12 @@ class GUI:
         self._start_background_workers()
 
     def _build_header(self):
-        header = tk.Frame(self.master, bg=BG_CARD, height=70)
+        header = tk.Frame(self.master, bg=BG_CARD, height=82)
         header.pack(fill="x")
         header.pack_propagate(False)
-        tk.Frame(header, bg=ACCENT, height=2).pack(fill="x")
+        tk.Frame(header, bg=ACCENT, height=4).pack(fill="x")
         inner = tk.Frame(header, bg=BG_CARD)
-        inner.pack(fill="both", expand=True, padx=20, pady=10)
+        inner.pack(fill="both", expand=True, padx=24, pady=14)
         title = tk.Frame(inner, bg=BG_CARD)
         title.pack(side="left", fill="y")
         tk.Label(title, text="CHESS", font=self.F_TITLE, fg=TEXT_PRIMARY, bg=BG_CARD).pack(side="left")
@@ -142,7 +143,7 @@ class GUI:
         tk.Label(inner, text="1 Start   ·   2 Stop   ·   Esc Kill", font=self.F_SMALL,
                  fg=TEXT_MUTED, bg=BG_CARD).pack(side="right", anchor="s", pady=(0, 3))
 
-        status = tk.Frame(inner, bg=DANGER_BG, highlightbackground="#4A151A", highlightthickness=1)
+        status = tk.Frame(inner, bg=DANGER_BG, highlightbackground="#E2C4BF", highlightthickness=1)
         status.pack(side="right", padx=(0, 18))
         self._status_pill = status
         self._status_dot = tk.Canvas(status, width=9, height=9, bg=DANGER_BG, highlightthickness=0)
@@ -153,13 +154,13 @@ class GUI:
 
     def _build_body(self):
         body = tk.Frame(self.master, bg=BG_BASE)
-        body.pack(fill="both", expand=True, padx=16, pady=14)
-        pane = tk.PanedWindow(body, orient="horizontal", sashwidth=8, bg=BG_BASE, bd=0, relief="flat")
+        body.pack(fill="both", expand=True, padx=20, pady=16)
+        pane = tk.PanedWindow(body, orient="horizontal", sashwidth=4, bg=BG_BASE, bd=0, relief="flat")
         pane.pack(fill="both", expand=True)
-        left = tk.Frame(pane, bg=BG_BASE, width=350)
+        left = tk.Frame(pane, bg=BG_BASE, width=370)
         right = tk.Frame(pane, bg=BG_CARD)
-        pane.add(left, minsize=300, width=350, stretch="never")
-        pane.add(right, minsize=400, stretch="always")
+        pane.add(left, minsize=330, width=370, stretch="never")
+        pane.add(right, minsize=480, stretch="always")
 
         canvas = tk.Canvas(left, bg=BG_BASE, highlightthickness=0)
         scroll = ttk.Scrollbar(left, orient="vertical", command=canvas.yview, style="Dark.Vertical.TScrollbar")
@@ -190,7 +191,8 @@ class GUI:
         button = tk.Button(parent, text=text, command=command, font=self.F_BUTTON,
                            fg="#FFFFFF", bg=color, activebackground=ACCENT_HI,
                            activeforeground="#FFFFFF", relief="flat", bd=0,
-                           cursor="hand2", padx=10, pady=8)
+                           cursor="hand2", padx=12, pady=10,
+                           highlightthickness=1, highlightbackground=color)
         button.pack(fill="x", pady=(0, 8))
         return button
 
@@ -218,7 +220,7 @@ class GUI:
         site = self._card(parent, "Platform")
         row = tk.Frame(site, bg=BG_ELEVATED)
         row.pack(fill="x")
-        self.chesscom_radio_button = tk.Radiobutton(row, text="Chess.com", variable=self.website, value="chesscom", indicatoron=0, bg=ACCENT, fg="white", selectcolor=ACCENT, activebackground=ACCENT_HI, relief="flat", bd=0, pady=7)
+        self.chesscom_radio_button = tk.Radiobutton(row, text="Chess.com", variable=self.website, value="chesscom", indicatoron=0, bg=ACCENT, fg="#FFFFFF", selectcolor=ACCENT, activebackground=ACCENT_HI, relief="flat", bd=0, pady=7)
         self.chesscom_radio_button.pack(side="left", fill="x", expand=True)
         self.lichess_radio_button = tk.Radiobutton(row, text="Lichess.org", variable=self.website, value="lichess", indicatoron=0, bg=BG_ELEVATED, fg=TEXT_SECONDARY, selectcolor=ACCENT, activebackground=BG_ELEVATED, relief="flat", bd=0, pady=7)
         self.lichess_radio_button.pack(side="left", fill="x", expand=True)
@@ -231,8 +233,8 @@ class GUI:
         modes = self._card(parent, "Modes")
         self.manual_mode_checkbox = self._check(modes, "Manual mode  (press 3)", self.enable_manual_mode, self.on_manual_mode_checkbox_listener)
         self.manual_mode_checkbox.pack(fill="x")
-        self.manual_mode_frame = tk.Frame(modes, bg="#1A2332", highlightbackground="#23344A", highlightthickness=1)
-        self.manual_mode_label = tk.Label(self.manual_mode_frame, text="Press 3 to make a move", font=("Segoe UI", 8, "bold"), fg=CYAN, bg="#1A2332")
+        self.manual_mode_frame = tk.Frame(modes, bg="#F1ECE4", highlightbackground="#DED5C8", highlightthickness=1)
+        self.manual_mode_label = tk.Label(self.manual_mode_frame, text="Press 3 to make a move", font=("Segoe UI", 8, "bold"), fg=CYAN, bg="#F1ECE4")
         self.manual_mode_label.pack(anchor="w", padx=9, pady=7)
         self._check(modes, "Mouseless mode  (Lichess only)", self.enable_mouseless_mode).pack(fill="x")
         self._check(modes, "Non-stop puzzles", self.enable_non_stop_puzzles).pack(fill="x")
@@ -252,7 +254,7 @@ class GUI:
         misc = self._card(parent, "Engine binary")
         self.stockfish_path = ""
         self.select_stockfish_button = self._button(misc, "SELECT STOCKFISH", self.on_select_stockfish_button_listener, BG_ELEVATED)
-        self.stockfish_path_text = tk.Label(misc, text="No Stockfish selected", fg="#FCA5A5", bg=DANGER_BG, justify="left", anchor="w", wraplength=300, font=("Consolas", 8))
+        self.stockfish_path_text = tk.Label(misc, text="No Stockfish selected", fg="#A94444", bg=DANGER_BG, justify="left", anchor="w", wraplength=300, font=("Consolas", 8))
         self.stockfish_path_text.pack(fill="x", pady=(2, 0), padx=2)
         self._path_wrap = misc
         self.topmost_check_button = self._check(misc, "Keep window on top", self.enable_topmost, self.on_topmost_check_button_listener)
@@ -300,7 +302,7 @@ class GUI:
         self.tree.column("move_no", width=48, stretch=False, anchor="center")
         self.tree.column("white", width=150, anchor="center")
         self.tree.column("black", width=150, anchor="center")
-        self.tree.tag_configure("odd", background="#161C25")
+        self.tree.tag_configure("odd", background="#F7F4EF")
         self.tree.tag_configure("even", background=BG_CARD)
         self.vsb = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview, style="Dark.Vertical.TScrollbar")
         self.tree.configure(yscrollcommand=self.vsb.set)
@@ -309,15 +311,15 @@ class GUI:
         self.export_pgn_button = self._button(parent, "EXPORT PGN", self.on_export_pgn_button_listener, BG_ELEVATED)
         self.export_pgn_button.pack(fill="x", padx=16, pady=(0, 12))
 
-        eval_box = tk.Frame(parent, bg="#10161F", highlightbackground=BORDER, highlightthickness=1)
+        eval_box = tk.Frame(parent, bg="#F8F6F1", highlightbackground=BORDER, highlightthickness=1)
         eval_box.pack(fill="x", padx=16, pady=(0, 16))
-        tk.Label(eval_box, text="ENGINE EVALUATION", font=("Segoe UI", 8, "bold"), fg=TEXT_MUTED, bg="#10161F").pack(anchor="w", padx=12, pady=(10, 5))
-        self.eval_text = tk.Label(eval_box, text="—", font=("Consolas", 18, "bold"), fg=TEXT_PRIMARY, bg="#10161F")
+        tk.Label(eval_box, text="ENGINE EVALUATION", font=("Segoe UI", 8, "bold"), fg=TEXT_MUTED, bg="#F8F6F1").pack(anchor="w", padx=12, pady=(10, 5))
+        self.eval_text = tk.Label(eval_box, text="—", font=("Consolas", 18, "bold"), fg=TEXT_PRIMARY, bg="#F8F6F1")
         self.eval_text.pack(anchor="w", padx=12)
         self._eval_canvas = tk.Canvas(eval_box, height=8, bg=BG_ELEVATED, highlightthickness=0)
         self._eval_canvas.pack(fill="x", padx=12, pady=8)
         self._eval_bar = self._eval_canvas.create_rectangle(0, 0, 0, 8, fill=TEXT_MUTED, outline="")
-        stats = tk.Frame(eval_box, bg="#10161F")
+        stats = tk.Frame(eval_box, bg="#F8F6F1")
         stats.pack(fill="x", padx=12, pady=(0, 10))
         self.wdl_text = self._stat(stats, "WDL")
         self.material_text = self._stat(stats, "MATERIAL")
@@ -325,18 +327,18 @@ class GUI:
         self.black_acc_text = self._stat(stats, "OPP ACC")
 
     def _stat(self, parent, name):
-        box = tk.Frame(parent, bg="#10161F")
+        box = tk.Frame(parent, bg="#F8F6F1")
         box.pack(side="left", fill="x", expand=True)
-        tk.Label(box, text=name, font=("Segoe UI", 7), fg=TEXT_MUTED, bg="#10161F").pack(anchor="w")
-        value = tk.Label(box, text="—", font=self.F_VALUE, fg=TEXT_PRIMARY, bg="#10161F")
+        tk.Label(box, text=name, font=("Segoe UI", 7), fg=TEXT_MUTED, bg="#F8F6F1").pack(anchor="w")
+        value = tk.Label(box, text="—", font=self.F_VALUE, fg=TEXT_PRIMARY, bg="#F8F6F1")
         value.pack(anchor="w")
         return value
 
     def _build_footer(self):
-        bar = tk.Frame(self.master, bg=DANGER_BG, highlightbackground="#4A151A", highlightthickness=1)
+        bar = tk.Frame(self.master, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1)
         bar.pack(fill="x", padx=16, pady=(0, 12))
-        tk.Label(bar, text="Emergency stop", fg="#FCA5A5", bg=DANGER_BG, font=self.F_SMALL).pack(side="left", padx=10, pady=7)
-        self.emergency_kill_button = tk.Button(bar, text="KILL BOT + BROWSER", command=self.emergency_kill, font=self.F_BUTTON, fg="white", bg=DANGER, activebackground="#B91C1C", relief="flat", bd=0, padx=12, pady=5, cursor="hand2")
+        tk.Label(bar, text="Emergency stop", fg="#8F4A44", bg=BG_CARD, font=self.F_SMALL).pack(side="left", padx=10, pady=7)
+        self.emergency_kill_button = tk.Button(bar, text="KILL BOT + BROWSER", command=self.emergency_kill, font=self.F_BUTTON, fg="#FFFFFF", bg=DANGER, activebackground="#943737", relief="flat", bd=0, padx=12, pady=5, cursor="hand2")
         self.emergency_kill_button.pack(side="right", padx=7, pady=5)
         for key in ("<Escape>", "<F12>", "<Control-q>", "<Control-Q>"):
             self.master.bind(key, lambda _e: self.emergency_kill())
@@ -356,7 +358,7 @@ class GUI:
     def _refresh_stockfish_label(self):
         path = self.stockfish_path or "No Stockfish selected"
         valid = bool(self.stockfish_path and os.path.exists(self.stockfish_path))
-        self.stockfish_path_text.configure(text=path, fg="#6EE7B7" if valid else "#FCA5A5", bg="#0B1E16" if valid else DANGER_BG)
+        self.stockfish_path_text.configure(text=path, fg="#2E7D5B" if valid else "#A94444", bg="#E7F2EB" if valid else DANGER_BG)
 
     def _start_background_workers(self):
         threading.Thread(target=self.process_checker_thread, daemon=True).start()
@@ -421,13 +423,13 @@ class GUI:
                     val = max(-10, min(10, v))
                     if v>0.6: color = SUCCESS
                     elif v<-0.6: color = DANGER
-                    else: color = "#94A3B8"
+                    else: color = "#8B929C"
                 except (ValueError, TypeError) as e:
                     logger.debug("eval cp parse failed %r: %s", eval_str, e)
             if val is None:
                 # idle center tick
                 c.coords(self._eval_bar, mid-1, 0, mid+1, h)
-                c.itemconfig(self._eval_bar, fill="#334155")
+                c.itemconfig(self._eval_bar, fill="#B8B0A3")
             else:
                 # bar extends from center outward
                 if val >=0:
@@ -551,12 +553,12 @@ class GUI:
         self.exit = True
         # visual feedback
         try:
-            self.emergency_kill_button.configure(text="☠ KILLING...", state="disabled", bg="#7F1D1D")
+            self.emergency_kill_button.configure(text="☠ KILLING...", state="disabled", bg="#8F3131")
             self.emergency_kill_button.update_idletasks()
         except Exception:
             pass
         try:
-            self._set_status("KILLED", "#FFFFFF", "#7F1D1D")
+            self._set_status("KILLED", "#FFFFFF", "#8F3131")
         except Exception:
             pass
         # hard-kill child processes without graceful join
@@ -655,7 +657,7 @@ class GUI:
     def _on_browser_closed_ui(self):
         """Thread-safe UI reset when browser is closed externally."""
         try:
-            self.open_browser_button.configure(text="↗   OPEN BROWSER", state="normal", bg="#0E7490")
+            self.open_browser_button.configure(text="↗   OPEN BROWSER", state="normal", bg="#3F7180")
         except tk.TclError as e:
             logger.debug("browser closed UI reset failed: %s", e)
 
@@ -738,7 +740,7 @@ class GUI:
                 try:
                     self.start_button["text"] = "■   STOP"
                     self.start_button["state"] = "normal"
-                    self.start_button.configure(bg="#DC2626", activebackground="#B91C1C", disabledforeground="#FCA5A5")
+                    self.start_button.configure(bg="#B54747", activebackground="#943737", disabledforeground="#A58F86")
                     self.start_button["command"] = self.on_stop_button_listener
                     self.start_button.update()
                 except Exception:
@@ -881,7 +883,7 @@ class GUI:
             self.opening_browser = False
             def _reset():
                 try:
-                    self.open_browser_button.configure(text="↗   OPEN BROWSER", state="normal", bg="#0E7490")
+                    self.open_browser_button.configure(text="↗   OPEN BROWSER", state="normal", bg="#3F7180")
                 except tk.TclError as e:
                     logger.debug("reset button failed: %s", e)
                 messagebox.showerror(msg_title, msg_body)
@@ -980,7 +982,7 @@ class GUI:
             self.opened_browser = True
             def _success():
                 try:
-                    self.open_browser_button.configure(text="✓  BROWSER OPEN", state="disabled", bg="#1E3A2E", fg="#6EE7B7")
+                    self.open_browser_button.configure(text="✓  BROWSER OPEN", state="disabled", bg="#E2F0E7", fg="#2E7D5B")
                     self.start_button.configure(state="normal")
                     # P1: re-validate inputs now that browser is ready
                     try: self._validate_inputs()
@@ -1018,10 +1020,10 @@ class GUI:
                 self.stockfish_path = auto
                 try:
                     self.stockfish_path_text["text"] = auto
-                    self.stockfish_path_text["fg"] = "#6EE7B7"
-                    self.stockfish_path_text["bg"] = "#0B1E16"
+                    self.stockfish_path_text["fg"] = "#2E7D5B"
+                    self.stockfish_path_text["bg"] = "#E7F2EB"
                     self.stockfish_path_text.update()
-                    self._path_wrap.configure(bg="#0B1E16", highlightbackground="#0F2A1E")
+                    self._path_wrap.configure(bg="#E7F2EB", highlightbackground="#CBE1D3")
                 except Exception:
                     pass
                 logger.info("Auto-resolved stockfish path on Start: %s", auto)
@@ -1048,7 +1050,7 @@ class GUI:
                             self._save_stockfish_path(dl)
                             try:
                                 self.stockfish_path_text["text"] = dl
-                                self.stockfish_path_text["fg"] = "#6EE7B7"
+                                self.stockfish_path_text["fg"] = "#2E7D5B"
                                 self.stockfish_path_text.update()
                             except Exception:
                                 pass
@@ -1078,7 +1080,7 @@ class GUI:
                     self._save_stockfish_path(dl)
                     try:
                         self.stockfish_path_text["text"] = dl
-                        self.stockfish_path_text["fg"] = "#6EE7B7"
+                        self.stockfish_path_text["fg"] = "#2E7D5B"
                         self.stockfish_path_text.update()
                     except Exception:
                         pass
@@ -1194,7 +1196,7 @@ class GUI:
                 self.start_button["text"] = "▶   START ENGINE"
                 self.start_button["state"] = "normal"
                 self.start_button["command"] = self.on_start_button_listener
-                self.start_button.configure(bg=ACCENT, activebackground=ACCENT_HI, fg="#FFFFFF", disabledforeground="#7A6AA0")
+                self.start_button.configure(bg=ACCENT, activebackground=ACCENT_HI, fg="#FFFFFF", disabledforeground="#AA9D91")
             else:
                 self.restart_after_stopping = False
                 self.on_start_button_listener()
@@ -1540,9 +1542,9 @@ class GUI:
         try:
             if not self.opened_browser:
                 # keep Start disabled until browser opened
-                self.start_button.configure(state="disabled", disabledforeground="#7A6AA0")
+                self.start_button.configure(state="disabled", disabledforeground="#AA9D91")
             elif not valid or not has_sf:
-                self.start_button.configure(state="disabled", disabledforeground="#FCA5A5")
+                self.start_button.configure(state="disabled", disabledforeground="#A58F86")
             else:
                 if not self.running:
                     self.start_button.configure(state="normal")
@@ -1793,9 +1795,9 @@ class GUI:
         self._save_stockfish_path(self.stockfish_path)
         try:
             self.stockfish_path_text["text"] = self.stockfish_path
-            self.stockfish_path_text["fg"] = "#6EE7B7"
-            self.stockfish_path_text["bg"] = "#0B1E16"
-            self._path_wrap.configure(bg="#0B1E16", highlightbackground="#0F2A1E")
+            self.stockfish_path_text["fg"] = "#2E7D5B"
+            self.stockfish_path_text["bg"] = "#E7F2EB"
+            self._path_wrap.configure(bg="#E7F2EB", highlightbackground="#CBE1D3")
             self.stockfish_path_text.update()
         except Exception:
             pass
@@ -1806,7 +1808,7 @@ class GUI:
             r = subprocess.run([self.stockfish_path, "uci"], input="quit\n", capture_output=True, text=True, timeout=3)
             if "uciok" in (r.stdout or ""):
                 logger.info("Stockfish validation success: %s", f)
-                self.stockfish_path_text["fg"] = "#6EE7B7"
+                self.stockfish_path_text["fg"] = "#2E7D5B"
             else:
                 logger.warning("Stockfish validation warning stdout=%r stderr=%r", r.stdout[:200], r.stderr[:200])
         except Exception as e:
