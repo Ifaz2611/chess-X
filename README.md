@@ -2,6 +2,8 @@
 
 > **Automated Stockfish-powered bot for chess.com and lichess.org — with GUI, overlay, and mouse automation.**
 
+<img width="917" height="792" alt="image" src="https://github.com/user-attachments/assets/19b250cb-802e-4494-ad2b-f8f1de07b78b" />
+
 Chess-X watches the browser board, queries **Stockfish** for the best move via `python-chess`, and plays it automatically using `PyAutoGUI` / mouseless WebSocket injection. Built for education and local analysis — **not for cheating in rated online games.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
