@@ -10,7 +10,5 @@
   "slow_mover": 100,
   "skill_level": 20,
   "stockfish_depth": 15,
-  "memory": 512,
-  "cpu_threads": 1,
   "enable_topmost": 1
 }

@@ -42,7 +42,7 @@ BG_ELEVATED = "#ECE7DE"
 BORDER = "#D7D0C4"
 TEXT_PRIMARY = "#000000"
 TEXT_SECONDARY = "#000000"
-TEXT_MUTED = "#050505"
+TEXT_MUTED = "#000000"
 ACCENT = "#B85C35"
 ACCENT_HI = "#974923"
 CYAN = "#3F7180"
@@ -116,7 +116,7 @@ class GUI:
                         foreground=TEXT_PRIMARY, rowheight=28, borderwidth=0,
                         font=("Segoe UI", 9))
         style.configure("Treeview.Heading", background="#E6E0D7",
-                        foreground="#505966", relief="flat",
+                        foreground="#000000", relief="flat",
                         font=("Segoe UI", 9, "bold"))
         style.map("Treeview", background=[("selected", "#E8D7CC")], foreground=[("selected", TEXT_PRIMARY)])
         style.configure("Dark.Vertical.TScrollbar", background="#D1C8BB",
@@ -188,9 +188,28 @@ class GUI:
         return content
 
     def _button(self, parent, text, command, color=ACCENT):
+        # Choose text color for contrast: black on light backgrounds (e.g. BG_ELEVATED),
+        # white on dark accent/danger/cyan. Fixes white-on-light invisible bug (SELECT STOCKFISH).
+        light_bgs = {BG_ELEVATED, "#ECE7DE", "#E6E0D7", "#F8F6F1", BG_CARD, BG_BASE}
+        # BG_ELEVATED is light beige => needs black text
+        is_light = color in light_bgs or color == BG_ELEVATED
+        # also treat any very light hex as light (luminance > 0.6)
+        if not is_light:
+            try:
+                r = int(color[1:3], 16); g = int(color[3:5], 16); b = int(color[5:7], 16)
+                lum = (0.299*r + 0.587*g + 0.114*b) / 255
+                is_light = lum > 0.65
+            except Exception:
+                is_light = False
+        fg = "#000000" if is_light else "#FFFFFF"
+        active_fg = "#000000" if is_light else "#FFFFFF"
+        # For light bg, use a slightly darker active bg for feedback
+        active_bg = "#D9D1C2" if is_light else ACCENT_HI
+        if color in (CYAN, DANGER):
+            active_bg = ACCENT_HI if color == ACCENT else ("#2F5D6B" if color == CYAN else "#943737")
         button = tk.Button(parent, text=text, command=command, font=self.F_BUTTON,
-                           fg="#FFFFFF", bg=color, activebackground=ACCENT_HI,
-                           activeforeground="#FFFFFF", relief="flat", bd=0,
+                           fg=fg, bg=color, activebackground=active_bg,
+                           activeforeground=active_fg, relief="flat", bd=0,
                            cursor="hand2", padx=12, pady=10,
                            highlightthickness=1, highlightbackground=color)
         button.pack(fill="x", pady=(0, 8))
@@ -201,6 +220,27 @@ class GUI:
                               bg=BG_CARD, fg=TEXT_SECONDARY, activebackground=BG_CARD,
                               activeforeground=TEXT_PRIMARY, selectcolor=BG_ELEVATED,
                               anchor="w", font=self.F_LABEL, bd=0, highlightthickness=0)
+
+    def _update_platform_radios(self, *_):
+        """Sync radio bg/fg so selected platform is clearly highlighted and text stays black/white as appropriate."""
+        try:
+            sel = self.website.get() if hasattr(self, "website") else "chesscom"
+            is_chess = sel == "chesscom"
+            # selected => ACCENT bg with white text, unselected => light bg with black text
+            self.chesscom_radio_button.configure(
+                bg=ACCENT if is_chess else BG_ELEVATED,
+                fg="#FFFFFF" if is_chess else "#000000",
+                activebackground=ACCENT_HI if is_chess else BG_ELEVATED,
+                selectcolor=ACCENT,
+            )
+            self.lichess_radio_button.configure(
+                bg=ACCENT if not is_chess else BG_ELEVATED,
+                fg="#FFFFFF" if not is_chess else "#000000",
+                activebackground=ACCENT_HI if not is_chess else BG_ELEVATED,
+                selectcolor=ACCENT,
+            )
+        except Exception:
+            pass
 
     def _build_controls(self, parent):
         self.website = tk.StringVar(value="chesscom")
@@ -213,28 +253,34 @@ class GUI:
         self.slow_mover = tk.IntVar(value=100)
         self.skill_level = tk.IntVar(value=20)
         self.stockfish_depth = tk.IntVar(value=15)
-        self.memory = tk.IntVar(value=512)
-        self.cpu_threads = tk.IntVar(value=1)
         self.enable_topmost = tk.IntVar(value=1)
 
         site = self._card(parent, "Platform")
         row = tk.Frame(site, bg=BG_ELEVATED)
         row.pack(fill="x")
-        self.chesscom_radio_button = tk.Radiobutton(row, text="Chess.com", variable=self.website, value="chesscom", indicatoron=0, bg=ACCENT, fg="#FFFFFF", selectcolor=ACCENT, activebackground=ACCENT_HI, relief="flat", bd=0, pady=7)
+        self.chesscom_radio_button = tk.Radiobutton(row, text="Chess.com", variable=self.website, value="chesscom", indicatoron=0, bg=ACCENT, fg="#FFFFFF", selectcolor=ACCENT, activebackground=ACCENT_HI, relief="flat", bd=0, pady=7, command=self._update_platform_radios)
         self.chesscom_radio_button.pack(side="left", fill="x", expand=True)
-        self.lichess_radio_button = tk.Radiobutton(row, text="Lichess.org", variable=self.website, value="lichess", indicatoron=0, bg=BG_ELEVATED, fg=TEXT_SECONDARY, selectcolor=ACCENT, activebackground=BG_ELEVATED, relief="flat", bd=0, pady=7)
+        self.lichess_radio_button = tk.Radiobutton(row, text="Lichess.org", variable=self.website, value="lichess", indicatoron=0, bg=BG_ELEVATED, fg="#000000", selectcolor=ACCENT, activebackground=BG_ELEVATED, relief="flat", bd=0, pady=7, command=self._update_platform_radios)
         self.lichess_radio_button.pack(side="left", fill="x", expand=True)
+        # keep radios visually in sync when website var changes via config load
+        try:
+            self.website.trace_add("write", lambda *_: self._update_platform_radios())
+        except Exception:
+            try:
+                self.website.trace("w", lambda *_: self._update_platform_radios())
+            except Exception:
+                pass
 
         controls = self._card(parent, "Controls")
         self.open_browser_button = self._button(controls, "OPEN BROWSER", self.on_open_browser_button_listener, CYAN)
         self.start_button = self._button(controls, "START ENGINE", self.on_start_button_listener)
-        self.start_button.configure(state="disabled", disabledforeground="#FFFFFF")
+        self.start_button.configure(state="disabled", disabledforeground="#8B7A88")
 
         modes = self._card(parent, "Modes")
         self.manual_mode_checkbox = self._check(modes, "Manual mode  (press 3)", self.enable_manual_mode, self.on_manual_mode_checkbox_listener)
         self.manual_mode_checkbox.pack(fill="x")
         self.manual_mode_frame = tk.Frame(modes, bg="#F1ECE4", highlightbackground="#DED5C8", highlightthickness=1)
-        self.manual_mode_label = tk.Label(self.manual_mode_frame, text="Press 3 to make a move", font=("Segoe UI", 8, "bold"), fg=CYAN, bg="#F1ECE4")
+        self.manual_mode_label = tk.Label(self.manual_mode_frame, text="Press 3 to make a move", font=("Segoe UI", 8, "bold"), fg="#000000", bg="#F1ECE4")
         self.manual_mode_label.pack(anchor="w", padx=9, pady=7)
         self._check(modes, "Mouseless mode  (Lichess only)", self.enable_mouseless_mode).pack(fill="x")
         self._check(modes, "Non-stop puzzles", self.enable_non_stop_puzzles).pack(fill="x")
@@ -248,8 +294,6 @@ class GUI:
         self._entry_row(engine, "Slow mover", self.slow_mover, "slow_mover_entry", 10, 1000)
         self._scale_row(engine, "Skill level", self.skill_level, 0, 20, "skill_level_scale")
         self._scale_row(engine, "Depth", self.stockfish_depth, 1, 20, "stockfish_depth_scale")
-        self._entry_row(engine, "Memory (MB)", self.memory, "memory_entry", 16, 8192)
-        self._entry_row(engine, "CPU threads", self.cpu_threads, "cpu_threads_entry", 1, 32)
 
         misc = self._card(parent, "Engine binary")
         self.stockfish_path = ""
@@ -1093,21 +1137,6 @@ class GUI:
         if self.enable_mouseless_mode.get() == 1 and self.website.get() == "chesscom":
             messagebox.showerror("Error", "Mouseless mode is only supported on lichess.org")
             return
-        # Validate threads vs cpu_count
-        try:
-            threads = int(self.cpu_threads.get())
-            cpu = os.cpu_count() or 1
-            if threads < 1 or threads > cpu * 2:
-                messagebox.showwarning("Warning", f"CPU Threads ({threads}) unusual for {cpu} cores – clamping to {cpu}")
-                self.cpu_threads.set(min(max(1, threads), cpu))
-        except Exception:
-            pass
-        try:
-            memory = int(self.memory.get())
-            if memory < 16 or memory > 8192:
-                messagebox.showwarning("Warning", "Memory recommended 16–8192 MB")
-        except Exception:
-            pass
 
         parent_conn, child_conn = multiprocess.Pipe()
         self.stockfish_bot_pipe = parent_conn
@@ -1119,7 +1148,7 @@ class GUI:
             self.stockfish_path, self.enable_manual_mode.get() == 1, self.enable_mouseless_mode.get() == 1,
             self.enable_non_stop_puzzles.get() == 1, self.enable_non_stop_matches.get() == 1,
             self.mouse_latency.get(), self.enable_bongcloud.get() == 1, self.slow_mover.get(),
-            self.skill_level.get(), self.stockfish_depth.get(), self.memory.get(), self.cpu_threads.get(),
+            self.skill_level.get(), self.stockfish_depth.get(),
         )
         self.stockfish_bot_process.start()
         # Lazy import overlay so importing gui (e.g. in tests) does not require PyQt6 / EGL
@@ -1196,7 +1225,7 @@ class GUI:
                 self.start_button["text"] = "▶   START ENGINE"
                 self.start_button["state"] = "normal"
                 self.start_button["command"] = self.on_start_button_listener
-                self.start_button.configure(bg=ACCENT, activebackground=ACCENT_HI, fg="#FFFFFF", disabledforeground="#AA9D91")
+                self.start_button.configure(bg=ACCENT, activebackground=ACCENT_HI, fg="#030303", disabledforeground="#AA9D91")
             else:
                 self.restart_after_stopping = False
                 self.on_start_button_listener()
@@ -1284,11 +1313,7 @@ class GUI:
             messagebox.showerror("Error", f"Failed to write PGN: {e}")
 
     def _config_path(self):
-        # Store next to src/config.json and also in project root
-        for cand in [os.path.join("src", "config.json"), "config.json", os.path.join(os.path.expanduser("~"), ".chess-x.json")]:
-            # prefer src/config.json
-            if cand == os.path.join("src", "config.json"):
-                return cand
+        # Central config location — keep simple and predictable
         return os.path.join("src", "config.json")
 
     # ── Full config persistence (P1: Persist config) ─────────────────
@@ -1307,8 +1332,6 @@ class GUI:
             "slow_mover": 100,
             "skill_level": 20,
             "stockfish_depth": 15,
-            "memory": 512,
-            "cpu_threads": 1,
             "enable_topmost": 1,
         }
         cfg_path = self._config_path()
@@ -1349,8 +1372,6 @@ class GUI:
                             merged["slow_mover"] = max(10, min(1000, int(merged["slow_mover"])))
                             merged["skill_level"] = max(0, min(20, int(merged["skill_level"])))
                             merged["stockfish_depth"] = max(1, min(20, int(merged["stockfish_depth"])))
-                            merged["memory"] = max(16, min(8192, int(merged["memory"])))
-                            merged["cpu_threads"] = max(1, min(32, int(merged["cpu_threads"])))
                             merged["enable_topmost"] = 1 if int(merged["enable_topmost"]) else 0
                             merged["website"] = "lichess" if str(merged["website"]).lower() in ("lichess", "lichess.org") else "chesscom"
                         except Exception:
@@ -1389,8 +1410,6 @@ class GUI:
                 data["slow_mover"] = int(self.slow_mover.get()) if hasattr(self, "slow_mover") else 100
                 data["skill_level"] = int(self.skill_level.get()) if hasattr(self, "skill_level") else 20
                 data["stockfish_depth"] = int(self.stockfish_depth.get()) if hasattr(self, "stockfish_depth") else 15
-                data["memory"] = int(self.memory.get()) if hasattr(self, "memory") else 512
-                data["cpu_threads"] = int(self.cpu_threads.get()) if hasattr(self, "cpu_threads") else 1
                 data["enable_topmost"] = int(self.enable_topmost.get()) if hasattr(self, "enable_topmost") else 1
             except Exception as e:
                 logger.debug("_save_config collect error: %s", e)
@@ -1434,12 +1453,6 @@ class GUI:
             if "stockfish_depth" in cfg:
                 try: self.stockfish_depth.set(int(cfg["stockfish_depth"]))
                 except Exception: pass
-            if "memory" in cfg:
-                try: self.memory.set(int(cfg["memory"]))
-                except Exception: pass
-            if "cpu_threads" in cfg:
-                try: self.cpu_threads.set(int(cfg["cpu_threads"]))
-                except Exception: pass
             if "enable_topmost" in cfg:
                 try:
                     self.enable_topmost.set(int(cfg["enable_topmost"]))
@@ -1448,8 +1461,10 @@ class GUI:
                         self.master.attributes("-topmost", bool(int(cfg["enable_topmost"])))
                     except Exception: pass
                 except Exception: pass
-            # need to refresh manual mode visibility
+            # need to refresh manual mode visibility and radio highlights
             try: self.on_manual_mode_checkbox_listener()
+            except Exception: pass
+            try: self._update_platform_radios()
             except Exception: pass
         except Exception as e:
             logger.debug("_apply_config_values error: %s", e)
@@ -1471,7 +1486,7 @@ class GUI:
             for var in [self.website, self.enable_manual_mode, self.enable_mouseless_mode,
                         self.enable_non_stop_puzzles, self.enable_non_stop_matches,
                         self.enable_bongcloud, self.mouse_latency, self.slow_mover,
-                        self.skill_level, self.stockfish_depth, self.memory, self.cpu_threads,
+                        self.skill_level, self.stockfish_depth,
                         self.enable_topmost]:
                 try: var.trace_add("write", lambda *a: self._schedule_save())
                 except Exception:
@@ -1484,7 +1499,6 @@ class GUI:
     def _validate_inputs(self, *a):
         """Validate all numeric entries; show red border on error and toggle Start button."""
         valid = True
-        cpu = os.cpu_count() or 4
         # Stockfish path must exist if Start is to be enabled (Browser can still open without)
         try:
             has_sf = bool(self.stockfish_path and os.path.exists(self.stockfish_path))
@@ -1504,36 +1518,6 @@ class GUI:
             valid = False
             try: self.slow_mover_entry.configure(highlightbackground=DANGER, highlightcolor=DANGER)
             except Exception: pass
-        # Memory 16-8192
-        try:
-            mem = int(self.memory.get())
-            if mem < 16 or mem > 8192:
-                valid = False
-                try: self.memory_entry.configure(highlightbackground=DANGER, highlightcolor=DANGER)
-                except Exception: pass
-            else:
-                try: self.memory_entry.configure(highlightbackground=BORDER, highlightcolor=BORDER)
-                except Exception: pass
-        except Exception:
-            valid = False
-        # Threads 1 - cpu*2, warn if > cpu_count
-        try:
-            thr = int(self.cpu_threads.get())
-            if thr < 1 or thr > 32:
-                valid = False
-                try: self.cpu_threads_entry.configure(highlightbackground=DANGER, highlightcolor=DANGER)
-                except Exception: pass
-            elif thr > cpu:
-                try: self.cpu_threads_entry.configure(highlightbackground=WARNING, highlightcolor=WARNING)
-                except Exception: pass
-            else:
-                try: self.cpu_threads_entry.configure(highlightbackground=BORDER, highlightcolor=BORDER)
-                except Exception: pass
-            # Prevent Threads > cpu*2 silently
-            if thr > cpu*2:
-                valid = False
-        except Exception:
-            valid = False
         # Skill/Depth already via scales (0-20,1-20) so always valid
 
         # If browser not opened, Start remains disabled regardless
@@ -1555,7 +1539,7 @@ class GUI:
     def _setup_validation_traces(self):
         """Call after widgets exist to wire live validation + Start toggle."""
         try:
-            for var in [self.slow_mover, self.memory, self.cpu_threads, self.skill_level, self.stockfish_depth, self.mouse_latency]:
+            for var in [self.slow_mover, self.skill_level, self.stockfish_depth, self.mouse_latency]:
                 try: var.trace_add("write", self._validate_inputs)
                 except Exception:
                     try: var.trace("w", lambda *a: self._validate_inputs())

@@ -24,8 +24,6 @@ def test_config_roundtrip(tmp_path, monkeypatch):
         "slow_mover": 200,
         "skill_level": 10,
         "stockfish_depth": 12,
-        "memory": 1024,
-        "cpu_threads": 4,
         "enable_topmost": 0,
     }
     with open(cfg_path, "w") as f:
@@ -50,7 +48,6 @@ def test_config_roundtrip(tmp_path, monkeypatch):
     assert loaded["website"] == "lichess"
     assert loaded["skill_level"] == 10
     assert loaded["mouse_latency"] == 1.5
-    assert loaded["memory"] == 1024
 
     # Modify and save
     # Setup vars as dummy attributes with .get() interface
@@ -69,8 +66,6 @@ def test_config_roundtrip(tmp_path, monkeypatch):
     dummy.slow_mover = Var(150)
     dummy.skill_level = Var(15)
     dummy.stockfish_depth = Var(18)
-    dummy.memory = Var(2048)
-    dummy.cpu_threads = Var(2)
     dummy.enable_topmost = Var(1)
     dummy.stockfish_path = "/tmp/fake_sf"
 
@@ -80,7 +75,6 @@ def test_config_roundtrip(tmp_path, monkeypatch):
     assert saved["website"] == "chesscom"
     assert saved["mouse_latency"] == 2.0
     assert saved["skill_level"] == 15
-    assert saved["cpu_threads"] == 2
 
 def test_config_defaults_when_missing(tmp_path):
     cfg_path = tmp_path / "nonexistent.json"

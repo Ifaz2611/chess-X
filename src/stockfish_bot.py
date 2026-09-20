@@ -28,7 +28,7 @@ if _kb is None:
 
 
 class StockfishBot(multiprocess.Process):
-    def __init__(self, chrome_url, chrome_session_id, website, pipe, overlay_queue, stockfish_path, enable_manual_mode, enable_mouseless_mode, enable_non_stop_puzzles, enable_non_stop_matches, mouse_latency, bongcloud, slow_mover, skill_level, stockfish_depth, memory, cpu_threads):
+    def __init__(self, chrome_url, chrome_session_id, website, pipe, overlay_queue, stockfish_path, enable_manual_mode, enable_mouseless_mode, enable_non_stop_puzzles, enable_non_stop_matches, mouse_latency, bongcloud, slow_mover, skill_level, stockfish_depth, memory=None, cpu_threads=None):
         multiprocess.Process.__init__(self)
         self.chrome_url = chrome_url
         self.chrome_session_id = chrome_session_id
@@ -46,8 +46,15 @@ class StockfishBot(multiprocess.Process):
         self.skill_level = skill_level
         self.stockfish_depth = stockfish_depth
         self.grabber = None
-        self.memory = memory
-        self.cpu_threads = cpu_threads
+        # Auto-managed engine resources — no longer exposed in GUI
+        self.memory = int(memory) if memory is not None else 512
+        if cpu_threads is not None:
+            self.cpu_threads = int(cpu_threads)
+        else:
+            try:
+                self.cpu_threads = max(1, int((os.cpu_count() or 2) // 2))
+            except Exception:
+                self.cpu_threads = 1
         self.is_white = None
         self._stockfish = None
         self._shutdown = False

@@ -89,9 +89,8 @@ Chess-X watches the browser board, queries **Stockfish** for the best move via `
 | **Tuning** | Mouse latency 0–15s | ✅ | ✅ | Slider `0.2s` steps |
 | | Skill 0–20 | ✅ | ✅ | Stockfish `Skill Level` |
 | | Depth 1–20 | ✅ | ✅ | Search depth |
-| | Memory (Hash) MB | ✅ | ✅ | Default `512` |
-| | Threads | ✅ | ✅ | Default `1` |
 | | Slow Mover 10–1000 | ✅ | ✅ | Default `100` |
+| | *Engine resources* | Auto | Auto | Hash/Threads auto-managed |
 | **Analytics** | PGN export | ✅ | ✅ | Via `Export PGN` button |
 | | Live eval (cp / mate) | ✅ | ✅ | In GUI + overlay bar |
 | | W/D/L % | ✅ | ✅ | From `get_wdl_stats()` |
@@ -268,8 +267,6 @@ Chess-X is currently configured entirely through the Tkinter GUI. Settings are n
 | Mouse Latency | Slider | No | `0.0`–`15.0` seconds |
 | Skill Level | Slider | No | `0`–`20` |
 | Depth | Slider | No | `1`–`20` |
-| Memory | Entry | No | Stockfish `Hash` in MB |
-| CPU Threads | Entry | No | Stockfish `Threads` |
 | Slow Mover | Entry | No | `10`–`1000` |
 | Always on top | Checkbox | No | Tkinter `-topmost` |
 
@@ -303,8 +300,6 @@ Planned configuration persistence is tracked in [TODO.md](TODO.md). Until then, 
 | `Slow Mover` | entry 10–1000 | `100` | Stockfish `Slow Mover` UCI — higher = longer think |
 | `Skill Level` | scale 0–20 | `20` | Stockfish skill |
 | `Depth` | scale 1–20 | `15` | Search depth (`stockfish depth=`) |
-| `Memory` | entry MB | `512` | Stockfish `Hash` |
-| `CPU Threads` | entry | `1` | Stockfish `Threads` |
 | `Window stays on top` | checkbox | on | `master.attributes("-topmost", ...)` |
 | `Select Stockfish` | button | — | File picker for engine path |
 | Move Treeview | table `# / White / Black` | — | Auto-scrolled SAN history |
@@ -318,11 +313,11 @@ Planned configuration persistence is tracked in [TODO.md](TODO.md). Until then, 
 |---|---|---|---|
 | **Skill Level** | `Skill Level` | 0–20 | Artificially weakens play. `20` = full strength. Lower values add intentional blunders. |
 | **Depth** | `depth` | 1–20 | Plies to search. Higher = stronger but slower. `15` is a good balance. `20` can stall on slow CPUs. |
-| **Memory** | `Hash` | MB | TT size. More hash helps deeper search. `512`–`1024` is typical for desktop. |
-| **Threads** | `Threads` | 1–N cores | Parallel search. `1` safest; set to physical cores for max NPS. |
 | **Slow Mover** | `Slow Mover` | 10–1000 | Time-management bias. `10` = rush, `100` = default, `500+` = quality over speed. Useful for bullet vs classical. |
 
-> Tip: For human-like play, try `Skill 8–12 + Depth 10–12 + Slow Mover 80`. For analysis, use `Skill 20 + Depth 18–20 + Threads = cores`.
+*Hash* and *Threads* are now auto-managed (512 MB and auto-detected cores) and no longer exposed in the GUI.
+
+> Tip: For human-like play, try `Skill 8–12 + Depth 10–12 + Slow Mover 80`. For analysis, use `Skill 20 + Depth 18–20`.
 
 ---
 
@@ -364,7 +359,7 @@ Planned configuration persistence is tracked in [TODO.md](TODO.md). Until then, 
 | PyAutoGUI clicks miss squares | DPI scaling / multi-monitor offset. `get_top_left_corner()` uses `window.screenX/Y`; verify board `location`/`size` in devtools. Try 100% display scaling. |
 | `data-processed` stale after new game | Known limitation — `moves_list` reset logic may miss rematches. Click **Stop → Start** to force `RESET` + `START`. |
 | Chrome closes immediately | Another Chrome instance or driver mismatch. Close all Chrome, delete `~/.wdm`, retry. Check `chrome.get_log("driver")` in `gui.py:398`. |
-| High CPU / slow moves | Lower `Depth` / `Threads` / `Hash`, or reduce `Slow Mover`. Monitor with `htop`. |
+| High CPU / slow moves | Lower `Depth` or reduce `Slow Mover`. Monitor with `htop`. |
 
 ---
 
@@ -389,7 +384,7 @@ Create a new grabber by subclassing the abstract `Grabber` in `src/grabbers/grab
 Not yet. Configuration persistence is planned. Until then, all GUI settings reset when the app closes.
 
 **Q: Why does Stockfish take so long to move?**  
-Check `Depth`, `Slow Mover`, `Threads`, and `Mouse Latency`. Higher depth and slow-mover values increase think time. For faster play, lower `Depth` to `10–12` and `Slow Mover` to `50–80`.
+Check `Depth`, `Slow Mover`, and `Mouse Latency`. Higher depth and slow-mover values increase think time. For faster play, lower `Depth` to `10–12` and `Slow Mover` to `50–80`.
 
 **Q: Can I run this headless?**  
 Not officially yet. Headless/Docker support is on the roadmap, but DOM scraping and mouse automation currently assume a visible browser.
