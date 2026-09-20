@@ -51,6 +51,12 @@ class StockfishBot(multiprocess.Process):
         self.is_white = None
         self._stockfish = None
         self._shutdown = False
+        # P1: Better accuracy model – centipawn loss tracking
+        self.white_cp_losses = []
+        self.black_cp_losses = []
+        self._prev_eval_cp = None  # white-centric cp before last move
+        self.white_best_moves = []
+        self.black_best_moves = []
 
     # --- helpers ---
 
@@ -144,6 +150,110 @@ class StockfishBot(multiprocess.Process):
             logger.debug("FEN reconcile error: %s", e)
             return board, False
         return board, False
+
+    # ── P1: Better accuracy model helpers (centipawn loss) ─────────
+    def _eval_to_white_cp(self, eval_data):
+        """Convert stockfish eval dict to white-centric centipawns (mate => ±10000)."""
+        if not eval_data or not isinstance(eval_data, dict):
+            return 0
+        try:
+            t = eval_data.get("type", "cp")
+            v = int(eval_data.get("value", 0))
+            if t == "cp":
+                return v
+            # mate: positive = white mates in v, negative = black mates
+            if v > 0:
+                return 10000 - (v * 10)
+            elif v < 0:
+                return -10000 - (v * 10)  # v negative => -10000 + |v|*10
+            else:
+                return 0
+        except Exception:
+            return 0
+
+    def _cp_loss_to_bucket(self, loss):
+        """Classify centipawn loss into lichess-like buckets."""
+        try:
+            l = int(loss)
+        except Exception:
+            l = 0
+        if l <= 10:
+            return "best"
+        elif l <= 50:
+            return "excellent"
+        elif l <= 100:
+            return "good"
+        elif l <= 200:
+            return "inaccuracy"
+        elif l <= 400:
+            return "mistake"
+        else:
+            return "blunder"
+
+    def _accuracy_from_losses(self, losses):
+        """Compute accuracy % from list of cp losses. Uses exponential decay similar to lichess."""
+        if not losses:
+            return "-"
+        try:
+            # Lichess-inspired: accuracy = 103.93 - 7.3 * avg_loss^0.15 ? simplified to weighted harmonic.
+            # We use: acc = 100 * exp(-avg_loss / 600) blended with linear to keep intuitive.
+            # Clamp and ensure 0–100.
+            avg = sum(losses) / len(losses)
+            # exponential component
+            import math
+            # avg 0 => 100, avg 50 => ~92, avg 150 => ~78, avg 350 => ~56
+            acc = 100 * math.exp(-avg / 550)
+            # boost slightly for very low avg
+            if avg < 20:
+                acc = min(100, acc + (20 - avg) * 0.05)
+            acc = max(0, min(100, acc))
+            return f"{acc:.1f}%"
+        except Exception:
+            return "-"
+
+    def _record_cp_loss(self, stockfish, board_before_turn_is_white):
+        """Call after a move has been pushed and stockfish position updated. Compares prev cp to current."""
+        try:
+            cur_eval = stockfish.get_evaluation()
+            if not cur_eval or "value" not in cur_eval:
+                return
+            cur_cp = self._eval_to_white_cp(cur_eval)
+            if self._prev_eval_cp is None:
+                self._prev_eval_cp = cur_cp
+                return
+            prev = self._prev_eval_cp
+            # mover is opposite of board.turn? Not reliable; use board_before param.
+            # loss from mover perspective: white mover => prev - cur, black mover => cur - prev
+            if board_before_turn_is_white:
+                loss = prev - cur_cp
+            else:
+                loss = cur_cp - prev
+            # negative loss means move improved eval => treat as 0
+            loss = max(0, int(loss))
+            if board_before_turn_is_white:
+                self.white_cp_losses.append(loss)
+            else:
+                self.black_cp_losses.append(loss)
+            logger.debug("cp loss %s: prev %d cur %d => loss %d (%s)", "white" if board_before_turn_is_white else "black", prev, cur_cp, loss, self._cp_loss_to_bucket(loss))
+            self._prev_eval_cp = cur_cp
+        except Exception as e:
+            logger.debug("_record_cp_loss error: %s", e)
+            try:
+                # still update prev to current to avoid drift
+                cur_eval = stockfish.get_evaluation()
+                self._prev_eval_cp = self._eval_to_white_cp(cur_eval)
+            except Exception:
+                pass
+
+    def _reset_accuracy_state(self, stockfish):
+        """Clear cp loss history and re-seed prev eval (call on new game)."""
+        self.white_cp_losses = []
+        self.black_cp_losses = []
+        try:
+            ev = stockfish.get_evaluation()
+            self._prev_eval_cp = self._eval_to_white_cp(ev)
+        except Exception:
+            self._prev_eval_cp = 0
 
     def move_to_screen_pos(self, move):
         canvas_x_offset, canvas_y_offset = self.grabber.get_top_left_corner()
@@ -335,6 +445,8 @@ class StockfishBot(multiprocess.Process):
 
             move_list_uci = [m.uci() for m in board.move_stack]
             stockfish.set_position(move_list_uci)
+            # P1: seed previous eval for cp-loss accuracy
+            self._reset_accuracy_state(stockfish)
 
             white_moves = []
             white_best_moves = []
@@ -442,6 +554,7 @@ class StockfishBot(multiprocess.Process):
                                     pass
                         except Exception:
                             move_san = move
+                        mover_is_white = (board.turn == chess.WHITE)
                         if board.turn == chess.WHITE:
                             white_moves.append(move)
                         else:
@@ -457,6 +570,8 @@ class StockfishBot(multiprocess.Process):
                         except Exception as e:
                             logger.warning("make_moves_from_current_position failed: %s", e)
                             stockfish.set_position([m.uci() for m in board.move_stack])
+                        # P1: record centipawn loss for accuracy model
+                        self._record_cp_loss(stockfish, mover_is_white)
                         move_list.append(move_san)
                         if self.enable_mouseless_mode and not self.grabber.is_game_puzzles():
                             try:
@@ -528,6 +643,9 @@ class StockfishBot(multiprocess.Process):
                     if len(new_move_list) == 0 and len(move_list) > 0:
                         logger.info("New game detected (0 moves)")
                         self._handle_new_game(board, stockfish)
+                        self.white_cp_losses = []
+                        self.black_cp_losses = []
+                        self._reset_accuracy_state(stockfish)
                         move_list = []
                         white_moves = []
                         white_best_moves = []
@@ -556,6 +674,13 @@ class StockfishBot(multiprocess.Process):
                         white_best_moves = white_best_moves[: (total+1)//2]
                         black_moves = black_moves[: total//2]
                         black_best_moves = black_best_moves[: total//2]
+                        # trim cp losses as well
+                        self.white_cp_losses = self.white_cp_losses[: (total+1)//2]
+                        self.black_cp_losses = self.black_cp_losses[: total//2]
+                        try:
+                            self._prev_eval_cp = self._eval_to_white_cp(stockfish.get_evaluation())
+                        except Exception:
+                            pass
                         move_list = new_move_list
                         self._clear_overlay_queue_safe()
                         self._safe_send("RESTART")
@@ -606,6 +731,7 @@ class StockfishBot(multiprocess.Process):
                 try:
                     move = move_list[-1]
                     prev_board = board.copy()
+                    mover_is_white = (prev_board.turn == chess.WHITE)
                     board.push_san(move)
                     move_uci = prev_board.parse_san(move).uci()
                     if prev_board.turn == chess.WHITE:
@@ -627,6 +753,8 @@ class StockfishBot(multiprocess.Process):
                     except Exception as e:
                         logger.debug("make_moves_from_current_position (opponent) failed: %s", e)
                         stockfish.set_position([m.uci() for m in board.move_stack])
+                    # P1: record cp loss for opponent move
+                    self._record_cp_loss(stockfish, mover_is_white)
                     self.send_eval_data(stockfish, board, white_moves, white_best_moves, black_moves, black_best_moves)
                     self._safe_send("S_MOVE" + move)
                 except Exception as e:
@@ -681,6 +809,12 @@ class StockfishBot(multiprocess.Process):
             logger.debug("_handle_new_game reset error: %s", e)
         self.grabber.reset_moves_list()
         self._clear_overlay_queue_safe()
+        # reset accuracy state
+        try:
+            self._reset_accuracy_state(stockfish)
+        except Exception:
+            self.white_cp_losses = []
+            self.black_cp_losses = []
         try:
             self.is_white = self.grabber.is_white()
         except Exception:
@@ -737,14 +871,27 @@ class StockfishBot(multiprocess.Process):
             except Exception:
                 wdl_stats = [0, 0, 0]
             material = self.calculate_material_advantage(board)
+            # P1: Better accuracy model – centipawn loss buckets (replaces exact-UCI-match)
+            # Prefer cp-loss based accuracy if losses are available; fallback to exact match for backwards compat
             white_accuracy = "-"
             black_accuracy = "-"
-            if white_moves and white_best_moves and len(white_moves) > 0 and len(white_moves) == len(white_best_moves):
-                matches = sum(1 for a, b in zip(white_moves, white_best_moves) if a == b)
-                white_accuracy = f"{matches / len(white_moves) * 100:.1f}%"
-            if black_moves and black_best_moves and len(black_moves) > 0 and len(black_moves) == len(black_best_moves):
-                matches = sum(1 for a, b in zip(black_moves, black_best_moves) if a == b)
-                black_accuracy = f"{matches / len(black_moves) * 100:.1f}%"
+            try:
+                # Use internal cp loss lists if populated
+                if getattr(self, "white_cp_losses", None) and len(self.white_cp_losses) > 0:
+                    white_accuracy = self._accuracy_from_losses(self.white_cp_losses)
+                elif white_moves and white_best_moves and len(white_moves) > 0 and len(white_moves) == len(white_best_moves):
+                    matches = sum(1 for a, b in zip(white_moves, white_best_moves) if a == b)
+                    white_accuracy = f"{matches / len(white_moves) * 100:.1f}%"
+            except Exception as e:
+                logger.debug("white accuracy calc error: %s", e)
+            try:
+                if getattr(self, "black_cp_losses", None) and len(self.black_cp_losses) > 0:
+                    black_accuracy = self._accuracy_from_losses(self.black_cp_losses)
+                elif black_moves and black_best_moves and len(black_moves) > 0 and len(black_moves) == len(black_best_moves):
+                    matches = sum(1 for a, b in zip(black_moves, black_best_moves) if a == b)
+                    black_accuracy = f"{matches / len(black_moves) * 100:.1f}%"
+            except Exception as e:
+                logger.debug("black accuracy calc error: %s", e)
             if eval_type == "cp":
                 eval_str = f"{player_perspective_eval_value/100:.2f}"
                 eval_value_decimal = player_perspective_eval_value/100

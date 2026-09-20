@@ -1,27 +1,25 @@
-import os
-import sys
-import platform
 import atexit
+import os
+import platform
 import signal
-import logging
+import sys
 import tempfile
-import datetime
-import multiprocess
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, font as tkFont
+from tkinter import filedialog, font as tkFont, messagebox, ttk
+
+import multiprocess
 from selenium import webdriver
+from selenium.common import WebDriverException
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common import WebDriverException
+
 from overlay import run
 from stockfish_bot import StockfishBot
-from utilities import get_logger, is_wayland, check_linux_input_permissions, get_keyboard_handler
+from utilities import check_linux_input_permissions, get_keyboard_handler, get_logger, is_wayland
 
 logger = get_logger("gui")
-
-# Keyboard fallback
 _kb, _kb_backend = get_keyboard_handler()
 if _kb is None:
     try:
@@ -32,46 +30,40 @@ if _kb is None:
         _kb_backend = None
 
 if is_wayland():
-    logger.warning("Wayland detected – PyAutoGUI and overlay may not work. Use X11/Xorg or QT_QPA_PLATFORM=xcb")
-
+    logger.warning("Wayland detected - overlay may not work reliably")
 _ok, _msg = check_linux_input_permissions()
 if not _ok:
     logger.warning(_msg)
 
-# ─────────────────────────────────────────────────────────────
-#  DESIGN TOKENS — modern dark chess theme
-# ─────────────────────────────────────────────────────────────
-BG_BASE       = "#0B0F14"   # page
-BG_CARD       = "#151B23"   # card
-BG_CARD_HI    = "#1C242F"   # card hover / elevated
-BG_ELEVATED   = "#232E3C"   # inputs / trough
-BG_INPUT      = "#1E2A3A"
-BORDER        = "#1F2A38"
-BORDER_LIGHT  = "#2A3A4E"
-TEXT_PRIMARY  = "#F1F5F9"
-TEXT_SECONDARY= "#94A3B8"
-TEXT_MUTED    = "#64748B"
-ACCENT        = "#8B5CF6"   # violet
-ACCENT_HI     = "#7C3AED"
-ACCENT_CYAN   = "#06B6D4"
-ACCENT_EMERALD= "#10B981"
-SUCCESS       = "#10B981"
-SUCCESS_BG    = "#052E1C"
-DANGER        = "#EF4444"
-DANGER_BG     = "#2E0D12"
-WARNING       = "#F59E0B"
-WARNING_BG    = "#2E1F0A"
-
-
-def _hex_to_rgb(h):
-    h=h.lstrip("#")
-    return tuple(int(h[i:i+2],16) for i in (0,2,4))
+BG_BASE = "#0B0F14"
+BG_CARD = "#151B23"
+BG_INPUT = "#1E2A3A"
+BG_ELEVATED = "#232E3C"
+BORDER = "#263447"
+TEXT_PRIMARY = "#F1F5F9"
+TEXT_SECONDARY = "#A6B3C5"
+TEXT_MUTED = "#708096"
+ACCENT = "#8B5CF6"
+ACCENT_HI = "#7C3AED"
+CYAN = "#06B6D4"
+SUCCESS = "#10B981"
+SUCCESS_BG = "#052E1C"
+DANGER = "#EF4444"
+DANGER_BG = "#2E0D12"
+WARNING = "#F59E0B"
 
 
 class GUI:
+    """Compact responsive controller for the Stockfish bot.
+
+    The process, browser, persistence, and protocol methods below are kept
+    compatible with the original application; only the layout is simplified.
+    """
+
     def __init__(self, master):
         self.master = master
         self.exit = False
+        self._cleaned = False
         self.chrome = None
         self.chrome_url = None
         self.chrome_session_id = None
@@ -79,654 +71,300 @@ class GUI:
         self.overlay_screen_pipe = None
         self.stockfish_bot_process = None
         self.overlay_screen_process = None
+        self._overlay_queue = None
         self.restart_after_stopping = False
         self.match_moves = []
-        self._overlay_queue = None
+        self.running = False
+        self.opened_browser = False
+        self.opening_browser = False
+        self._save_after_id = None
         self._export_counter = 0
         self._last_export_dir = None
 
-        master.title("CHESS-X  —  Stockfish Bot")
-        master.geometry("895x830")
-        master.minsize(895, 830)
-        try:
-            # keep reference so image doesn't get GC'd
-            self._pawn_img = tk.PhotoImage(file="src/assets/pawn_32x32.png")
-            # upscale a bit with zoom if tiny, else keep
-            master.iconphoto(True, self._pawn_img)
-        except Exception:
-            self._pawn_img = None
-        master.resizable(False, False)
+        master.title("CHESS-X · Stockfish Bot")
+        master.geometry("980x700")
+        master.minsize(760, 560)
         master.configure(bg=BG_BASE)
-        master.attributes("-topmost", True)
         master.protocol("WM_DELETE_WINDOW", self.on_close_listener)
-
-        # Graceful shutdown handlers
+        try:
+            master.iconphoto(True, tk.PhotoImage(file="src/assets/pawn_32x32.png"))
+        except Exception:
+            pass
+        try:
+            master.attributes("-topmost", True)
+        except Exception:
+            pass
         atexit.register(self._cleanup)
         try:
-            signal.signal(signal.SIGINT, lambda s, f: self.on_close_listener())
-            signal.signal(signal.SIGTERM, lambda s, f: self.on_close_listener())
+            signal.signal(signal.SIGINT, lambda *_: self.on_close_listener())
+            signal.signal(signal.SIGTERM, lambda *_: self.on_close_listener())
         except Exception:
             pass
 
-        # ── Fonts ─────────────────────────────────────
-        self.F_TITLE      = tkFont.Font(family="Segoe UI", size=14, weight="bold")
-        self.F_SUB        = tkFont.Font(family="Segoe UI", size=8)
-        self.F_CARD_TITLE = tkFont.Font(family="Segoe UI", size=7, weight="bold")
-        self.F_LABEL      = tkFont.Font(family="Segoe UI", size=8)
-        self.F_LABEL_B    = tkFont.Font(family="Segoe UI", size=8, weight="bold")
-        self.F_VALUE      = tkFont.Font(family="Consolas", size=9, weight="bold")
-        self.F_BTN        = tkFont.Font(family="Segoe UI", size=9, weight="bold")
-        self.F_BTN_SM     = tkFont.Font(family="Segoe UI", size=8, weight="bold")
-        self.F_TREE_HEAD  = tkFont.Font(family="Segoe UI", size=8, weight="bold")
+        self.F_TITLE = tkFont.Font(family="Segoe UI", size=15, weight="bold")
+        self.F_LABEL = tkFont.Font(family="Segoe UI", size=9)
+        self.F_VALUE = tkFont.Font(family="Consolas", size=10, weight="bold")
+        self.F_BUTTON = tkFont.Font(family="Segoe UI", size=9, weight="bold")
+        self.F_SMALL = tkFont.Font(family="Segoe UI", size=8)
 
         style = ttk.Style()
         try:
             style.theme_use("clam")
-        except Exception:
+        except tk.TclError:
             pass
+        style.configure("Treeview", background=BG_CARD, fieldbackground=BG_CARD,
+                        foreground=TEXT_PRIMARY, rowheight=28, borderwidth=0,
+                        font=("Segoe UI", 9))
+        style.configure("Treeview.Heading", background=BG_ELEVATED,
+                        foreground=TEXT_SECONDARY, relief="flat",
+                        font=("Segoe UI", 9, "bold"))
+        style.map("Treeview", background=[("selected", "#3B2A68")])
+        style.configure("Dark.Vertical.TScrollbar", background=BG_ELEVATED,
+                        troughcolor=BG_BASE, borderwidth=0, arrowsize=12)
 
-        # Treeview dark style
-        style.configure("Treeview",
-                        background=BG_CARD, foreground=TEXT_PRIMARY,
-                        fieldbackground=BG_CARD, rowheight=23,
-                        borderwidth=0, relief="flat", font=("Segoe UI", 8))
-        style.configure("Treeview.Heading",
-                        background="#1E293B", foreground=TEXT_SECONDARY,
-                        relief="flat", font=("Segoe UI", 8, "bold"), padding=6)
-        style.map("Treeview.Heading", background=[("active", "#25344A")])
-        style.configure("Vertical.TScrollbar",
-                        background=BG_ELEVATED, troughcolor=BG_CARD,
-                        borderwidth=0, arrowsize=0)
-        style.map("Vertical.TScrollbar", background=[("active", BORDER_LIGHT)])
-        style.configure("Horizontal.TScale",
-                        background=BG_CARD, troughcolor=BG_ELEVATED,
-                        sliderlength=16, borderwidth=0)
+        self._build_header()
+        self._build_body()
+        self._build_footer()
+        self._load_state()
+        self._start_background_workers()
 
-        # ═══════════════════════════════════════════════════
-        #  HEADER
-        # ═══════════════════════════════════════════════════
-        header = tk.Frame(master, bg=BG_CARD, height=62)
-        header.pack(fill="x", side="top")
+    def _build_header(self):
+        header = tk.Frame(self.master, bg=BG_CARD, height=70)
+        header.pack(fill="x")
         header.pack_propagate(False)
-        # subtle inner highlight line at top
-        tk.Frame(header, bg="#1F2E44", height=1).pack(fill="x", side="top")
-        header_inner = tk.Frame(header, bg=BG_CARD)
-        header_inner.pack(fill="both", expand=True, padx=16, pady=9)
+        tk.Frame(header, bg=ACCENT, height=2).pack(fill="x")
+        inner = tk.Frame(header, bg=BG_CARD)
+        inner.pack(fill="both", expand=True, padx=20, pady=10)
+        title = tk.Frame(inner, bg=BG_CARD)
+        title.pack(side="left", fill="y")
+        tk.Label(title, text="CHESS", font=self.F_TITLE, fg=TEXT_PRIMARY, bg=BG_CARD).pack(side="left")
+        tk.Label(title, text="-X", font=self.F_TITLE, fg=ACCENT, bg=BG_CARD).pack(side="left")
+        tk.Label(title, text="  STOCKFISH BOT", font=self.F_SMALL, fg=TEXT_MUTED, bg=BG_CARD).pack(side="left", padx=(8, 0), pady=(8, 0))
+        tk.Label(inner, text="1 Start   ·   2 Stop   ·   Esc Kill", font=self.F_SMALL,
+                 fg=TEXT_MUTED, bg=BG_CARD).pack(side="right", anchor="s", pady=(0, 3))
 
-        h_left = tk.Frame(header_inner, bg=BG_CARD)
-        h_left.pack(side="left", anchor="w")
-        # pawn badge
-        badge = tk.Frame(h_left, bg="#1E293B", highlightbackground=BORDER, highlightthickness=1)
-        badge.pack(side="left", padx=(0, 12))
-        badge_inner = tk.Frame(badge, bg="#1E293B")
-        badge_inner.pack(padx=7, pady=6)
-        if self._pawn_img is not None:
-            # pawn image is light; place on dark badge with no extra bg
-            tk.Label(badge_inner, image=self._pawn_img, bg="#1E293B").pack()
-        else:
-            tk.Label(badge_inner, text="♞", font=("Segoe UI", 18), fg=ACCENT, bg="#1E293B").pack()
+        status = tk.Frame(inner, bg=DANGER_BG, highlightbackground="#4A151A", highlightthickness=1)
+        status.pack(side="right", padx=(0, 18))
+        self._status_pill = status
+        self._status_dot = tk.Canvas(status, width=9, height=9, bg=DANGER_BG, highlightthickness=0)
+        self._status_dot.pack(side="left", padx=(9, 5), pady=7)
+        self._dot_oval = self._status_dot.create_oval(0, 0, 9, 9, fill=DANGER, outline="")
+        self.status_text = tk.Label(status, text="INACTIVE", font=("Segoe UI", 8, "bold"), fg=DANGER, bg=DANGER_BG)
+        self.status_text.pack(side="left", padx=(0, 10), pady=5)
 
-        title_stack = tk.Frame(h_left, bg=BG_CARD)
-        title_stack.pack(side="left", anchor="w")
-        row1 = tk.Frame(title_stack, bg=BG_CARD)
-        row1.pack(anchor="w")
-        tk.Label(row1, text="CHESS", font=self.F_TITLE, fg=TEXT_PRIMARY, bg=BG_CARD).pack(side="left")
-        tk.Label(row1, text="-X", font=self.F_TITLE, fg=ACCENT, bg=BG_CARD).pack(side="left")
-        tk.Label(row1, text="  v2.1", font=("Segoe UI", 7), fg=TEXT_MUTED, bg=BG_CARD).pack(side="left", padx=(6,0), anchor="s", pady=(6,0))
-        tk.Label(title_stack, text="STOCKFISH  •  CHESS.COM  •  LICHESS", font=self.F_SUB, fg=TEXT_MUTED, bg=BG_CARD).pack(anchor="w")
+    def _build_body(self):
+        body = tk.Frame(self.master, bg=BG_BASE)
+        body.pack(fill="both", expand=True, padx=16, pady=14)
+        pane = tk.PanedWindow(body, orient="horizontal", sashwidth=8, bg=BG_BASE, bd=0, relief="flat")
+        pane.pack(fill="both", expand=True)
+        left = tk.Frame(pane, bg=BG_BASE, width=350)
+        right = tk.Frame(pane, bg=BG_CARD)
+        pane.add(left, minsize=300, width=350, stretch="never")
+        pane.add(right, minsize=400, stretch="always")
 
-        h_right = tk.Frame(header_inner, bg=BG_CARD)
-        h_right.pack(side="right", anchor="e")
-        # live indicator dot + status pill
-        self._status_pill = tk.Frame(h_right, bg=DANGER_BG, highlightbackground="#3A1A1E", highlightthickness=1)
-        self._status_pill.pack(side="top", anchor="e")
-        pill_inner = tk.Frame(self._status_pill, bg=DANGER_BG)
-        pill_inner.pack(padx=10, pady=5)
-        self._status_dot = tk.Canvas(pill_inner, width=8, height=8, bg=DANGER_BG, highlightthickness=0)
-        self._status_dot.pack(side="left", padx=(0,6))
-        self._dot_oval = self._status_dot.create_oval(0,0,8,8, fill=DANGER, outline="")
-        # status_text lives inside pill so pipe handlers still work via fg/bg
-        self.status_text = tk.Label(pill_inner, text="INACTIVE", font=("Segoe UI", 7, "bold"), fg=DANGER, bg=DANGER_BG)
-        self.status_text.pack(side="left")
-        tk.Label(h_right, text="Press  1 ▶ Start   2 ■ Stop   3 ↻ Move   Esc ☠ Kill", font=("Segoe UI", 7), fg=TEXT_MUTED, bg=BG_CARD).pack(anchor="e", pady=(6,0))
+        canvas = tk.Canvas(left, bg=BG_BASE, highlightthickness=0)
+        scroll = ttk.Scrollbar(left, orient="vertical", command=canvas.yview, style="Dark.Vertical.TScrollbar")
+        content = tk.Frame(canvas, bg=BG_BASE)
+        window = canvas.create_window((0, 0), window=content, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        content.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
+        canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-3, "units"))
+        canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(3, "units"))
 
-        # hairline under header
-        tk.Frame(master, bg=BORDER, height=1).pack(fill="x", side="top")
+        self._build_controls(content)
+        self._build_moves(right)
 
-        # ── Emergency kill bar — always visible at bottom, hard-kills everything ──
-        kill_bar = tk.Frame(master, bg=DANGER_BG, highlightbackground="#4A151A", highlightthickness=1)
-        kill_bar.pack(side="bottom", fill="x", padx=12, pady=(0, 8))
-        kill_inner = tk.Frame(kill_bar, bg=DANGER_BG)
-        kill_inner.pack(fill="x", padx=8, pady=7)
-        tk.Label(kill_inner, text="⚠  Emergency:", font=("Segoe UI", 7, "bold"), fg=DANGER, bg=DANGER_BG).pack(side="left")
-        tk.Label(kill_inner, text="instantly kills bot + overlay + browser", font=("Segoe UI", 7), fg="#FCA5A5", bg=DANGER_BG).pack(side="left", padx=(4, 0))
-        self.emergency_kill_button = tk.Button(kill_inner, text="☠  EMERGENCY KILL", command=self.emergency_kill,
-                                               font=("Segoe UI", 9, "bold"), fg="#FFFFFF", bg=DANGER, activebackground="#B91C1C",
-                                               activeforeground="#FFFFFF", relief="flat", bd=0, padx=14, pady=5, cursor="hand2", highlightthickness=0)
-        self.emergency_kill_button.pack(side="right")
-        def _hover_kill(e, enter):
-            try: self.emergency_kill_button.configure(bg="#B91C1C" if enter else DANGER)
-            except: pass
-        self.emergency_kill_button.bind("<Enter>", lambda e: _hover_kill(e, True))
-        self.emergency_kill_button.bind("<Leave>", lambda e: _hover_kill(e, False))
-        # keyboard shortcuts for emergency kill (Esc / F12 / Ctrl+Q) even when focus is in entry
-        try:
-            master.bind("<Escape>", lambda e: self.emergency_kill())
-            master.bind("<F12>", lambda e: self.emergency_kill())
-            master.bind("<Control-q>", lambda e: self.emergency_kill())
-            master.bind("<Control-Q>", lambda e: self.emergency_kill())
-        except Exception:
-            pass
+    def _card(self, parent, title):
+        box = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1)
+        box.pack(fill="x", pady=(0, 10))
+        tk.Label(box, text=title.upper(), font=("Segoe UI", 8, "bold"), fg=TEXT_MUTED, bg=BG_CARD).pack(anchor="w", padx=14, pady=(11, 7))
+        tk.Frame(box, bg=BORDER, height=1).pack(fill="x", padx=14)
+        content = tk.Frame(box, bg=BG_CARD)
+        content.pack(fill="x", padx=14, pady=12)
+        return content
 
-        # ═══════════════════════════════════════════════════
-        #  BODY
-        # ═══════════════════════════════════════════════════
-        body = tk.Frame(master, bg=BG_BASE)
-        body.pack(fill="both", expand=True, padx=12, pady=12)
+    def _button(self, parent, text, command, color=ACCENT):
+        button = tk.Button(parent, text=text, command=command, font=self.F_BUTTON,
+                           fg="#FFFFFF", bg=color, activebackground=ACCENT_HI,
+                           activeforeground="#FFFFFF", relief="flat", bd=0,
+                           cursor="hand2", padx=10, pady=8)
+        button.pack(fill="x", pady=(0, 8))
+        return button
 
-        # Scrollable left pane — fixes clipping when content exceeds window height
-        left_container = tk.Frame(body, bg=BG_BASE, width=330)
-        left_container.pack(side="left", fill="y", padx=(0, 10))
-        left_container.pack_propagate(False)
+    def _check(self, parent, text, variable, command=None):
+        return tk.Checkbutton(parent, text=text, variable=variable, command=command,
+                              bg=BG_CARD, fg=TEXT_SECONDARY, activebackground=BG_CARD,
+                              activeforeground=TEXT_PRIMARY, selectcolor=BG_ELEVATED,
+                              anchor="w", font=self.F_LABEL, bd=0, highlightthickness=0)
 
-        left_canvas = tk.Canvas(left_container, bg=BG_BASE, highlightthickness=0, width=330)
-        left_vsb = ttk.Scrollbar(left_container, orient="vertical", command=left_canvas.yview)
-        # keep scrollbar subtle on dark bg
-        left_canvas.configure(yscrollcommand=lambda f,l: left_vsb.set(f,l))
-        left_vsb.pack(side="right", fill="y")
-        left_canvas.pack(side="left", fill="both", expand=True)
-
-        left_frame = tk.Frame(left_canvas, bg=BG_BASE)
-        left_win = left_canvas.create_window((0, 0), window=left_frame, anchor="nw")
-        def _left_configure(event):
-            try:
-                bbox = left_canvas.bbox("all")
-                if bbox:
-                    left_canvas.configure(scrollregion=bbox)
-                # match width
-                left_canvas.itemconfig(left_win, width=event.width if event.width>0 else 310)
-            except tk.TclError as e:
-                logger.debug("left_configure failed: %s", e)
-        left_frame.bind("<Configure>", _left_configure)
-        # inner resize
-        def _canvas_configure(event):
-            try:
-                left_canvas.itemconfig(left_win, width=event.width)
-            except tk.TclError as e:
-                logger.debug("canvas_configure failed: %s", e)
-        left_canvas.bind("<Configure>", _canvas_configure)
-        # keep scrollbar subtle — direct set, no lambda wrapper
-        left_canvas.configure(yscrollcommand=left_vsb.set)
-        # ── mouse wheel — robust, works over any child widget (Windows/macOS/Linux) ──
-        def _on_mousewheel(event):
-            try:
-                # Windows / macOS: event.delta is multiple of 120 (Win) or small values (macOS)
-                if getattr(event, "delta", 0):
-                    delta = event.delta
-                    # On Windows delta is 120/-120 per notch; macOS may be 1/-1
-                    if abs(delta) >= 120:
-                        steps = int(-1 * (delta / 120))
-                    else:
-                        steps = -1 if delta > 0 else 1
-                    left_canvas.yview_scroll(steps, "units")
-                    return "break"
-                # Linux: Button-4 (up) / Button-5 (down)
-                if getattr(event, "num", None) == 4:
-                    left_canvas.yview_scroll(-3, "units")
-                    return "break"
-                if getattr(event, "num", None) == 5:
-                    left_canvas.yview_scroll(3, "units")
-                    return "break"
-            except tk.TclError as e:
-                logger.debug("mousewheel TclError: %s", e)
-            except Exception as e:
-                logger.debug("mousewheel error: %s", e)
-            return "break"
-
-        def _is_over_left():
-            try:
-                px, py = left_container.winfo_pointerxy()
-                rx, ry = left_container.winfo_rootx(), left_container.winfo_rooty()
-                rw, rh = left_container.winfo_width(), left_container.winfo_height()
-                return rx <= px <= rx + rw and ry <= py <= ry + rh
-            except tk.TclError:
-                return False
-            except Exception:
-                return False
-
-        def _global_wheel(event):
-            if _is_over_left():
-                return _on_mousewheel(event)
-            return None
-
-        # Global bindings — check hover before scrolling so right pane doesn't steal
-        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            try:
-                left_canvas.bind_all(seq, _global_wheel, add="+")
-            except tk.TclError as e:
-                logger.debug("bind_all %s failed: %s", seq, e)
-        # Direct bindings for cases where bind_all is blocked (ensure break propagation)
-        for widget in (left_canvas, left_frame, left_container):
-            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-                try:
-                    widget.bind(seq, _on_mousewheel, add="+")
-                except tk.TclError:
-                    pass
-        # Keep references so GC doesn't drop callbacks
-        self._on_mousewheel = _on_mousewheel
-        self._global_wheel = _global_wheel
-        self._left_canvas = left_canvas
-        self._left_container = left_container
-
-        right_frame = tk.Frame(body, bg=BG_BASE)
-        right_frame.pack(side="left", fill="both", expand=True)
-
-        # ── helpers ─────────────────────────────────────
-        def card(parent, title, icon="◆"):
-            outer = tk.Frame(parent, bg=BORDER, highlightthickness=0)
-            outer.pack(fill="x", pady=(0, 10))
-            inner = tk.Frame(outer, bg=BG_CARD)
-            inner.pack(fill="x", padx=1, pady=1)
-            head = tk.Frame(inner, bg=BG_CARD)
-            head.pack(fill="x", padx=12, pady=(10, 2))
-            tk.Label(head, text=icon, font=("Segoe UI", 7), fg=ACCENT, bg=BG_CARD).pack(side="left", padx=(0,6))
-            tk.Label(head, text=title.upper(), font=self.F_CARD_TITLE, fg=TEXT_MUTED, bg=BG_CARD).pack(side="left")
-            tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(6, 8))
-            content = tk.Frame(inner, bg=BG_CARD)
-            content.pack(fill="x", padx=12, pady=(0, 10))
-            return inner, content
-
-        def styled_button(parent, text, bg, bg_hover, fg="#FFFFFF", cmd=None, height=1, padx=10):
-            btn = tk.Button(parent, text=text, command=cmd,
-                            font=self.F_BTN, fg=fg, bg=bg, activebackground=bg_hover,
-                            activeforeground=fg, relief="flat", bd=0, padx=padx, pady=6,
-                            cursor="hand2", highlightthickness=0)
-            # hover
-            def on_enter(e): btn.configure(bg=bg_hover, activebackground=bg_hover)
-            def on_leave(e): btn.configure(bg=bg, activebackground=bg_hover)
-            btn.bind("<Enter>", on_enter)
-            btn.bind("<Leave>", on_leave)
-            # fake rounded corners via outer frame
-            wrapper = tk.Frame(parent, bg=bg, highlightthickness=0)
-            # pack wrapper? caller packs btn directly so we just return btn with bindings
-            # need to keep wrapper for border radius illusion — just return btn
-            wrapper._btn = btn
-            return btn
-
-        def make_scale(parent, var, frm, to, label_text):
-            row = tk.Frame(parent, bg=BG_CARD)
-            row.pack(fill="x", pady=2)
-            tk.Label(row, text=label_text, font=self.F_LABEL, fg=TEXT_SECONDARY, bg=BG_CARD, width=14, anchor="w").pack(side="left")
-            val_lbl = tk.Label(row, textvariable=None, font=("Consolas", 8, "bold"), fg=ACCENT, bg=BG_CARD, width=4, anchor="e")
-            # update val_lbl when var changes
-            def _upd(*a):
-                try: val_lbl.configure(text=str(var.get()))
-                except: pass
-            try: var.trace_add("write", _upd)
-            except: var.trace("w", lambda *a: _upd())
-            _upd()
-            val_lbl.pack(side="right")
-            sc = tk.Scale(row, from_=frm, to=to, orient="horizontal",
-                          variable=var, bg=BG_CARD, fg=TEXT_MUTED,
-                          troughcolor=BG_ELEVATED, highlightthickness=0,
-                          activebackground=ACCENT, sliderlength=14,
-                          relief="flat", bd=0, length=150,
-                          font=("Segoe UI", 7))
-            sc.pack(fill="x", padx=(0,4), pady=(0,0))
-            return sc
-
-        def add_int_validation(entry, var, min_v, max_v):
-            """Clamp int entries, reject non-numeric input, show red border on error."""
-            def _on_focus_out(event):
-                try:
-                    v = int(var.get())
-                except Exception:
-                    # try parse entry text directly
-                    try:
-                        v = int(entry.get().strip())
-                        var.set(v)
-                    except Exception:
-                        entry.configure(highlightbackground=DANGER, highlightcolor=DANGER)
-                        return
-                # clamp
-                orig = v
-                v = max(min_v, min(max_v, v))
-                if v != orig:
-                    var.set(v)
-                    try:
-                        entry.configure(highlightbackground=WARNING, highlightcolor=WARNING)
-                        entry.after(800, lambda: entry.configure(highlightbackground=BORDER, highlightcolor=BORDER))
-                    except: pass
-                else:
-                    entry.configure(highlightbackground=BORDER, highlightcolor=BORDER)
-            def _validate(key):
-                # allow empty during typing, digits only
-                if key == "":
-                    return True
-                # allow minus? no, only positive
-                return key.isdigit()
-            try:
-                vcmd = (entry.register(_validate), "%P")
-                entry.configure(validate="key", validatecommand=vcmd)
-            except Exception:
-                pass
-            entry.bind("<FocusOut>", _on_focus_out)
-            entry.bind("<Return>", _on_focus_out)
-            return
-
-        # ── CARD: ENGINE READOUT ────────────────────────
-        eval_card, eval_content = card(left_frame, "Engine evaluation", "⬢")
-
-        # eval headline + bar
-        self.eval_frame = tk.Frame(eval_content, bg=BG_CARD)
-        self.eval_frame.pack(fill="x")
-
-        # Eval row with bar
-        eval_row = tk.Frame(eval_content, bg=BG_CARD)
-        eval_row.pack(fill="x", pady=(0,6))
-        tk.Label(eval_row, text="EVAL", font=self.F_LABEL_B, fg=TEXT_MUTED, bg=BG_CARD).pack(side="left")
-        self.eval_text = tk.Label(eval_row, text="—", font=("Consolas", 11, "bold"), fg=TEXT_PRIMARY, bg=BG_CARD)
-        self.eval_text.pack(side="right")
-        # eval bar canvas (small advantage meter)
-        self._eval_canvas = tk.Canvas(eval_content, height=6, bg=BG_ELEVATED, highlightthickness=0, bd=0)
-        self._eval_canvas.pack(fill="x", pady=(0,10))
-        self._eval_bar = self._eval_canvas.create_rectangle(0,0,0,6, fill=TEXT_MUTED, outline="")
-
-        def _eval_grid(parent, icon, label, var_name):
-            r = tk.Frame(parent, bg=BG_CARD)
-            r.pack(fill="x", pady=3)
-            left = tk.Frame(r, bg=BG_CARD)
-            left.pack(side="left")
-            tk.Label(left, text=icon, font=("Segoe UI", 8), fg=TEXT_MUTED, bg=BG_CARD, width=2, anchor="center").pack(side="left")
-            tk.Label(left, text=label, font=self.F_LABEL, fg=TEXT_SECONDARY, bg=BG_CARD).pack(side="left", padx=(4,0))
-            val = tk.Label(r, font=self.F_VALUE, bg=BG_CARD, fg=TEXT_PRIMARY)
-            val.pack(side="right", anchor="e")
-            return val
-
-        self.wdl_text      = _eval_grid(eval_content, "♟", "WDL", "wdl")
-        self.material_text = _eval_grid(eval_content, "◈", "MATERIAL", "mat")
-        self.white_acc_text= _eval_grid(eval_content, "⬣", "BOT ACC", "bacc")
-        self.black_acc_text= _eval_grid(eval_content, "⬡", "OPPONENT ACC", "oacc")
-        # default texts
-        for w in (self.wdl_text, self.material_text, self.white_acc_text, self.black_acc_text):
-            w.configure(text="—", fg=TEXT_MUTED)
-
-        # wayland / permission warnings inside card as banners
-        banner_parent = eval_content
-        if is_wayland():
-            b = tk.Frame(banner_parent, bg=WARNING_BG, highlightbackground="#3B2A0A", highlightthickness=1)
-            b.pack(fill="x", pady=(8,0))
-            tk.Label(b, text="⚠  Wayland detected — overlay may fail (use X11)", font=("Segoe UI", 7), fg=WARNING, bg=WARNING_BG, wraplength=270, justify="left").pack(padx=8, pady=5, anchor="w")
-        if not _ok and platform.system() == "Linux":
-            b = tk.Frame(banner_parent, bg=WARNING_BG, highlightbackground="#3B2A0A", highlightthickness=1)
-            b.pack(fill="x", pady=(4,0))
-            tk.Label(b, text="⚠  keyboard may need sudo / input group", font=("Segoe UI", 7), fg=WARNING, bg=WARNING_BG, wraplength=270, justify="left").pack(padx=8, pady=5, anchor="w")
-
-        # ── CARD: PLATFORM ──────────────────────────────
-        plat_card, plat_content = card(left_frame, "Platform", "◉")
+    def _build_controls(self, parent):
         self.website = tk.StringVar(value="chesscom")
-
-        # pill radio buttons
-        pill = tk.Frame(plat_content, bg=BG_ELEVATED, highlightthickness=0)
-        pill.pack(fill="x", pady=2)
-        pill_inner = tk.Frame(pill, bg=BG_ELEVATED)
-        pill_inner.pack(padx=3, pady=3, fill="x")
-
-        def pill_radio(parent, text, value):
-            rb = tk.Radiobutton(parent, text=text, variable=self.website, value=value,
-                                indicatoron=0, selectcolor=ACCENT, bg=BG_ELEVATED,
-                                fg=TEXT_SECONDARY, activebackground=BG_ELEVATED,
-                                activeforeground=TEXT_PRIMARY, relief="flat", bd=0,
-                                font=("Segoe UI", 8, "bold"), padx=12, pady=6,
-                                cursor="hand2", highlightthickness=0, offrelief="flat", overrelief="flat")
-            # dynamic colors on select
-            def _refresh(*a):
-                if self.website.get()==value:
-                    rb.configure(bg=ACCENT, fg="#FFFFFF", activebackground=ACCENT_HI)
-                else:
-                    rb.configure(bg=BG_ELEVATED, fg=TEXT_SECONDARY, activebackground=BG_CARD_HI)
-            try: self.website.trace_add("write", _refresh)
-            except: self.website.trace("w", lambda *a: _refresh())
-            _refresh()
-            rb.pack(side="left", fill="x", expand=True, padx=2)
-            return rb
-        self.chesscom_radio_button = pill_radio(pill_inner, "♚  Chess.com", "chesscom")
-        self.lichess_radio_button  = pill_radio(pill_inner, "♞  Lichess.org", "lichess")
-
-        # ── CARD: CONTROLS ──────────────────────────────
-        ctrl_card, ctrl_content = card(left_frame, "Controls", "▶")
-
-        self.opening_browser = False
-        self.opened_browser = False
-        # Browser button — cyan / outline style
-        self.open_browser_button = tk.Button(ctrl_content, text="↗   OPEN BROWSER", command=self.on_open_browser_button_listener,
-                                             font=self.F_BTN, fg="#FFFFFF", bg="#0E7490", activebackground="#155E75",
-                                             activeforeground="#FFFFFF", relief="flat", bd=0, padx=10, pady=9, cursor="hand2", highlightthickness=0)
-        self.open_browser_button.pack(fill="x", pady=(0,8))
-        def _hover_browser(e, enter):
-            if self.opened_browser: return
-            self.open_browser_button.configure(bg="#155E75" if enter else "#0E7490")
-        self.open_browser_button.bind("<Enter>", lambda e: _hover_browser(e, True))
-        self.open_browser_button.bind("<Leave>", lambda e: _hover_browser(e, False))
-
-        self.running = False
-        self.start_button = tk.Button(ctrl_content, text="▶   START ENGINE", command=self.on_start_button_listener,
-                                      font=self.F_BTN, fg="#FFFFFF", bg=ACCENT, activebackground=ACCENT_HI,
-                                      activeforeground="#FFFFFF", relief="flat", bd=0, padx=10, pady=10, cursor="hand2", highlightthickness=0,
-                                      state="disabled", disabledforeground="#FFFFFF")
-        self.start_button.pack(fill="x")
-        # keep hover for start (only when enabled)
-        def _hover_start(e, enter):
-            if str(self.start_button["state"])=="disabled": return
-            # detect STOP via substring (covers "■   STOP" etc.)
-            txt = str(self.start_button["text"]).lower()
-            is_stop = "stop" in txt
-            if is_stop:
-                self.start_button.configure(bg="#B91C1C" if enter else "#DC2626")
-            else:
-                self.start_button.configure(bg=ACCENT_HI if enter else ACCENT)
-        self.start_button.bind("<Enter>", lambda e: _hover_start(e, True))
-        self.start_button.bind("<Leave>", lambda e: _hover_start(e, False))
-
-        # ── CARD: MODES ─────────────────────────────────
-        modes_card, modes_content = card(left_frame, "Modes", "⚙")
-
-        def styled_check(parent, text, var):
-            cb = tk.Checkbutton(parent, text=text, variable=var,
-                                bg=BG_CARD, fg=TEXT_SECONDARY, selectcolor=BG_ELEVATED,
-                                activebackground=BG_CARD, activeforeground=TEXT_PRIMARY,
-                                font=("Segoe UI", 8), anchor="w", padx=0, pady=2,
-                                highlightthickness=0, bd=0, cursor="hand2")
-            cb.pack(fill="x", anchor="w")
-            return cb
-
         self.enable_manual_mode = tk.BooleanVar(value=False)
-        self.manual_mode_checkbox = styled_check(modes_content, "  Manual Mode  (play with 3)", self.enable_manual_mode)
-        try: self.manual_mode_checkbox.configure(command=self.on_manual_mode_checkbox_listener)
-        except: pass
-        self.manual_mode_frame = tk.Frame(modes_content, bg=BG_CARD)
-        # banner shown when manual on
-        inner_banner = tk.Frame(self.manual_mode_frame, bg="#1A2332", highlightbackground="#23344A", highlightthickness=1)
-        inner_banner.pack(fill="x", pady=(4,2))
-        self.manual_mode_label = tk.Label(inner_banner, text="●  Press  3  to make a move", font=("Segoe UI", 7, "bold"), fg=ACCENT_CYAN, bg="#1A2332")
-        self.manual_mode_label.pack(padx=8, pady=5, anchor="w")
-
         self.enable_mouseless_mode = tk.BooleanVar(value=False)
-        self.mouseless_mode_checkbox = styled_check(modes_content, "  Mouseless Mode  (Lichess only)", self.enable_mouseless_mode)
-
         self.enable_non_stop_puzzles = tk.IntVar(value=0)
-        self.non_stop_puzzles_check_button = styled_check(modes_content, "  Non-stop puzzles", self.enable_non_stop_puzzles)
-
         self.enable_non_stop_matches = tk.IntVar(value=0)
-        self.non_stop_matches_check_button = styled_check(modes_content, "  Non-stop online matches", self.enable_non_stop_matches)
-
-        self.enable_bongcloud = tk.IntVar()
-        self.bongcloud_check_button = styled_check(modes_content, "  Bongcloud  😎", self.enable_bongcloud)
-
-        # mouse latency row (compact)
-        lat_row = tk.Frame(modes_content, bg=BG_CARD)
-        lat_row.pack(fill="x", pady=(8,0))
-        tk.Label(lat_row, text="Mouse latency", font=self.F_LABEL, fg=TEXT_MUTED, bg=BG_CARD).pack(side="left")
+        self.enable_bongcloud = tk.IntVar(value=0)
         self.mouse_latency = tk.DoubleVar(value=0.0)
-        tk.Label(lat_row, textvariable=self.mouse_latency, font=("Consolas", 8), fg=TEXT_SECONDARY, bg=BG_CARD, width=5, anchor="e").pack(side="right")
-        self.mouse_latency_scale = tk.Scale(modes_content, from_=0.0, to=15, resolution=0.2, orient="horizontal", variable=self.mouse_latency,
-                                            bg=BG_CARD, fg=TEXT_MUTED, troughcolor=BG_ELEVATED, highlightthickness=0,
-                                            activebackground=ACCENT, sliderlength=14, relief="flat", bd=0, length=200)
+        self.slow_mover = tk.IntVar(value=100)
+        self.skill_level = tk.IntVar(value=20)
+        self.stockfish_depth = tk.IntVar(value=15)
+        self.memory = tk.IntVar(value=512)
+        self.cpu_threads = tk.IntVar(value=1)
+        self.enable_topmost = tk.IntVar(value=1)
+
+        site = self._card(parent, "Platform")
+        row = tk.Frame(site, bg=BG_ELEVATED)
+        row.pack(fill="x")
+        self.chesscom_radio_button = tk.Radiobutton(row, text="Chess.com", variable=self.website, value="chesscom", indicatoron=0, bg=ACCENT, fg="white", selectcolor=ACCENT, activebackground=ACCENT_HI, relief="flat", bd=0, pady=7)
+        self.chesscom_radio_button.pack(side="left", fill="x", expand=True)
+        self.lichess_radio_button = tk.Radiobutton(row, text="Lichess.org", variable=self.website, value="lichess", indicatoron=0, bg=BG_ELEVATED, fg=TEXT_SECONDARY, selectcolor=ACCENT, activebackground=BG_ELEVATED, relief="flat", bd=0, pady=7)
+        self.lichess_radio_button.pack(side="left", fill="x", expand=True)
+
+        controls = self._card(parent, "Controls")
+        self.open_browser_button = self._button(controls, "OPEN BROWSER", self.on_open_browser_button_listener, CYAN)
+        self.start_button = self._button(controls, "START ENGINE", self.on_start_button_listener)
+        self.start_button.configure(state="disabled", disabledforeground="#FFFFFF")
+
+        modes = self._card(parent, "Modes")
+        self.manual_mode_checkbox = self._check(modes, "Manual mode  (press 3)", self.enable_manual_mode, self.on_manual_mode_checkbox_listener)
+        self.manual_mode_checkbox.pack(fill="x")
+        self.manual_mode_frame = tk.Frame(modes, bg="#1A2332", highlightbackground="#23344A", highlightthickness=1)
+        self.manual_mode_label = tk.Label(self.manual_mode_frame, text="Press 3 to make a move", font=("Segoe UI", 8, "bold"), fg=CYAN, bg="#1A2332")
+        self.manual_mode_label.pack(anchor="w", padx=9, pady=7)
+        self._check(modes, "Mouseless mode  (Lichess only)", self.enable_mouseless_mode).pack(fill="x")
+        self._check(modes, "Non-stop puzzles", self.enable_non_stop_puzzles).pack(fill="x")
+        self._check(modes, "Non-stop online matches", self.enable_non_stop_matches).pack(fill="x")
+        self._check(modes, "Bongcloud", self.enable_bongcloud).pack(fill="x")
+        tk.Label(modes, text="Mouse latency", fg=TEXT_MUTED, bg=BG_CARD, font=self.F_LABEL).pack(anchor="w", pady=(8, 0))
+        self.mouse_latency_scale = tk.Scale(modes, from_=0, to=15, resolution=.2, variable=self.mouse_latency, orient="horizontal", bg=BG_CARD, fg=TEXT_MUTED, troughcolor=BG_ELEVATED, activebackground=ACCENT, highlightthickness=0, bd=0, showvalue=True)
         self.mouse_latency_scale.pack(fill="x")
 
-        # ── CARD: STOCKFISH ─────────────────────────────
-        sf_card, sf_content = card(left_frame, "Stockfish parameters", "⬢")
+        engine = self._card(parent, "Stockfish")
+        self._entry_row(engine, "Slow mover", self.slow_mover, "slow_mover_entry", 10, 1000)
+        self._scale_row(engine, "Skill level", self.skill_level, 0, 20, "skill_level_scale")
+        self._scale_row(engine, "Depth", self.stockfish_depth, 1, 20, "stockfish_depth_scale")
+        self._entry_row(engine, "Memory (MB)", self.memory, "memory_entry", 16, 8192)
+        self._entry_row(engine, "CPU threads", self.cpu_threads, "cpu_threads_entry", 1, 32)
 
-        # slow mover
-        slow_row = tk.Frame(sf_content, bg=BG_CARD)
-        slow_row.pack(fill="x", pady=2)
-        self.slow_mover_label = tk.Label(slow_row, text="Slow Mover", font=self.F_LABEL, fg=TEXT_SECONDARY, bg=BG_CARD, width=14, anchor="w")
-        self.slow_mover_label.pack(side="left")
-        self.slow_mover = tk.IntVar(value=100)
-        self.slow_mover_entry = tk.Entry(slow_row, textvariable=self.slow_mover, justify="center", width=8,
-                                         font=("Consolas", 9), fg=TEXT_PRIMARY, bg=BG_INPUT, relief="flat",
-                                         highlightbackground=BORDER, highlightthickness=1, insertbackground=TEXT_PRIMARY)
-        self.slow_mover_entry.pack(side="right", ipady=3)
-        add_int_validation(self.slow_mover_entry, self.slow_mover, 10, 1000)
+        misc = self._card(parent, "Engine binary")
+        self.stockfish_path = ""
+        self.select_stockfish_button = self._button(misc, "SELECT STOCKFISH", self.on_select_stockfish_button_listener, BG_ELEVATED)
+        self.stockfish_path_text = tk.Label(misc, text="No Stockfish selected", fg="#FCA5A5", bg=DANGER_BG, justify="left", anchor="w", wraplength=300, font=("Consolas", 8))
+        self.stockfish_path_text.pack(fill="x", pady=(2, 0), padx=2)
+        self._path_wrap = misc
+        self.topmost_check_button = self._check(misc, "Keep window on top", self.enable_topmost, self.on_topmost_check_button_listener)
+        self.topmost_check_button.pack(fill="x", pady=(10, 0))
 
-        self.skill_level = tk.IntVar(value=20)
-        self.skill_level_scale = make_scale(sf_content, self.skill_level, 0, 20, "Skill Level")
-        self.stockfish_depth = tk.IntVar(value=15)
-        self.stockfish_depth_scale = make_scale(sf_content, self.stockfish_depth, 1, 20, "Depth")
+    def _entry_row(self, parent, label, variable, attr, minimum, maximum):
+        row = tk.Frame(parent, bg=BG_CARD)
+        row.pack(fill="x", pady=4)
+        tk.Label(row, text=label, fg=TEXT_SECONDARY, bg=BG_CARD, font=self.F_LABEL).pack(side="left")
+        entry = tk.Entry(row, textvariable=variable, width=8, justify="center", font=("Consolas", 9), fg=TEXT_PRIMARY, bg=BG_INPUT, insertbackground=TEXT_PRIMARY, relief="flat", highlightthickness=1, highlightbackground=BORDER)
+        entry.pack(side="right", ipady=4)
+        setattr(self, attr, entry)
+        def validate(value):
+            return value == "" or value.isdigit()
+        entry.configure(validate="key", validatecommand=(entry.register(validate), "%P"))
+        entry.bind("<FocusOut>", lambda _e: self._clamp(variable, minimum, maximum))
 
-        mem_row = tk.Frame(sf_content, bg=BG_CARD)
-        mem_row.pack(fill="x", pady=(6,2))
-        tk.Label(mem_row, text="Memory", font=self.F_LABEL, fg=TEXT_SECONDARY, bg=BG_CARD, width=14, anchor="w").pack(side="left")
-        self.memory = tk.IntVar(value=512)
-        self.memory_entry = tk.Entry(mem_row, textvariable=self.memory, justify="center", width=7,
-                                     font=("Consolas", 9), fg=TEXT_PRIMARY, bg=BG_INPUT, relief="flat",
-                                     highlightbackground=BORDER, highlightthickness=1, insertbackground=TEXT_PRIMARY)
-        self.memory_entry.pack(side="left")
-        tk.Label(mem_row, text="MB", font=self.F_LABEL, fg=TEXT_MUTED, bg=BG_CARD).pack(side="left", padx=(6,0))
-        add_int_validation(self.memory_entry, self.memory, 16, 8192)
+    def _scale_row(self, parent, label, variable, minimum, maximum, attr):
+        row = tk.Frame(parent, bg=BG_CARD)
+        row.pack(fill="x", pady=3)
+        tk.Label(row, text=label, fg=TEXT_SECONDARY, bg=BG_CARD, font=self.F_LABEL).pack(anchor="w")
+        scale = tk.Scale(row, from_=minimum, to=maximum, variable=variable, orient="horizontal", bg=BG_CARD, fg=TEXT_MUTED, troughcolor=BG_ELEVATED, activebackground=ACCENT, highlightthickness=0, bd=0, showvalue=True)
+        scale.pack(fill="x")
+        setattr(self, attr, scale)
 
-        thr_row = tk.Frame(sf_content, bg=BG_CARD)
-        thr_row.pack(fill="x", pady=2)
-        tk.Label(thr_row, text="CPU Threads", font=self.F_LABEL, fg=TEXT_SECONDARY, bg=BG_CARD, width=14, anchor="w").pack(side="left")
-        self.cpu_threads = tk.IntVar(value=1)
-        self.cpu_threads_entry = tk.Entry(thr_row, textvariable=self.cpu_threads, justify="center", width=7,
-                                          font=("Consolas", 9), fg=TEXT_PRIMARY, bg=BG_INPUT, relief="flat",
-                                          highlightbackground=BORDER, highlightthickness=1, insertbackground=TEXT_PRIMARY)
-        self.cpu_threads_entry.pack(side="left")
-        add_int_validation(self.cpu_threads_entry, self.cpu_threads, 1, 32)
+    def _clamp(self, variable, minimum, maximum):
+        try:
+            variable.set(max(minimum, min(maximum, int(variable.get()))))
+        except (TypeError, ValueError):
+            variable.set(minimum)
 
-        # ── CARD: MISC ──────────────────────────────────
-        misc_card, misc_content = card(left_frame, "Misc", "—")
-
-        self.enable_topmost = tk.IntVar(value=1)
-        self.topmost_check_button = styled_check(misc_content, "  Window stays on top", self.enable_topmost)
-        try: self.topmost_check_button.configure(command=self.on_topmost_check_button_listener)
-        except: pass
-
-        self.stockfish_path = self._load_stockfish_path()
-        self.select_stockfish_button = tk.Button(misc_content, text="  SELECT STOCKFISH BINARY  ", command=self.on_select_stockfish_button_listener,
-                                                 font=self.F_BTN_SM, fg=TEXT_SECONDARY, bg=BG_ELEVATED, activebackground=BG_CARD_HI,
-                                                 activeforeground=TEXT_PRIMARY, relief="flat", bd=0, padx=8, pady=7, cursor="hand2",
-                                                 highlightbackground=BORDER, highlightthickness=1)
-        self.select_stockfish_button.pack(fill="x", pady=(6,0))
-        def _hover_sel(e, enter):
-            self.select_stockfish_button.configure(bg=BG_CARD_HI if enter else BG_ELEVATED)
-        self.select_stockfish_button.bind("<Enter>", lambda e: _hover_sel(e, True))
-        self.select_stockfish_button.bind("<Leave>", lambda e: _hover_sel(e, False))
-
-        initial_text = self.stockfish_path if self.stockfish_path else "No stockfish selected"
-        if self.stockfish_path:
-            pcol = "#10B981"
-            pbg = "#0B1E16"
-            pfg = "#6EE7B7"
-        else:
-            pcol = DANGER
-            pbg = DANGER_BG
-            pfg = "#FCA5A5"
-        path_wrap = tk.Frame(misc_content, bg=pbg, highlightbackground="#2A1E1E" if not self.stockfish_path else "#0F2A1E", highlightthickness=1)
-        path_wrap.pack(fill="x", pady=(6,0))
-        self._path_wrap = path_wrap
-        self.stockfish_path_text = tk.Label(path_wrap, text=initial_text, wraplength=260, font=("Consolas", 7), fg=pfg, bg=pbg, justify="left", anchor="w")
-        self.stockfish_path_text.pack(fill="x", padx=8, pady=6)
-
-        if not self.stockfish_path:
-            auto = self._auto_find_stockfish()
-            if auto:
-                self.stockfish_path = auto
-                self.stockfish_path_text.configure(text=auto, fg="#6EE7B7", bg="#0B1E16")
-                self._path_wrap.configure(bg="#0B1E16", highlightbackground="#0F2A1E")
-                self.stockfish_path_text.configure(bg="#0B1E16")
-                logger.info("Auto-detected stockfish at %s", auto)
-                self._save_stockfish_path(auto)
-
-        # ═══════════════════════════════════════════════════
-        #  RIGHT — MOVES
-        # ═══════════════════════════════════════════════════
-        hist_outer = tk.Frame(right_frame, bg=BORDER, highlightthickness=0)
-        hist_outer.pack(fill="both", expand=True)
-        hist_inner = tk.Frame(hist_outer, bg=BG_CARD)
-        hist_inner.pack(fill="both", expand=True, padx=1, pady=1)
-
-        hist_head = tk.Frame(hist_inner, bg=BG_CARD)
-        hist_head.pack(fill="x", padx=14, pady=(12,8))
-        h = tk.Frame(hist_head, bg=BG_CARD)
-        h.pack(side="left")
-        tk.Label(h, text="◆", font=("Segoe UI", 7), fg=ACCENT, bg=BG_CARD).pack(side="left", padx=(0,6))
-        tk.Label(h, text="MOVE HISTORY", font=self.F_CARD_TITLE, fg=TEXT_MUTED, bg=BG_CARD).pack(side="left")
-        # move count badge
-        self._move_count = tk.Label(hist_head, text="0 moves", font=("Segoe UI", 7, "bold"), fg=TEXT_MUTED, bg=BG_ELEVATED, padx=8, pady=2)
+    def _build_moves(self, parent):
+        top = tk.Frame(parent, bg=BG_CARD)
+        top.pack(fill="x", padx=16, pady=(15, 10))
+        tk.Label(top, text="MOVE HISTORY", font=("Segoe UI", 10, "bold"), fg=TEXT_PRIMARY, bg=BG_CARD).pack(side="left")
+        self._move_count = tk.Label(top, text="0 moves", font=self.F_SMALL, fg=TEXT_MUTED, bg=BG_ELEVATED, padx=8, pady=3)
         self._move_count.pack(side="right")
-
-        tk.Frame(hist_inner, bg=BORDER, height=1).pack(fill="x", padx=14, pady=(0,0))
-
-        treeview_frame = tk.Frame(hist_inner, bg=BG_CARD)
-        treeview_frame.pack(fill="both", expand=True, padx=8, pady=8)
-
-        self.tree = ttk.Treeview(treeview_frame, columns=("move_no", "white", "black"), show="headings", height=22, selectmode="browse", style="Treeview")
-        self.tree.pack(side="left", fill="both", expand=True)
-        self.vsb = ttk.Scrollbar(treeview_frame, orient="vertical", command=self.tree.yview, style="Vertical.TScrollbar")
-        self.vsb.pack(side="right", fill="y")
-        self.tree.configure(yscrollcommand=self.vsb.set)
-        self.tree.column("move_no", anchor="center", width=44, stretch=False)
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=16)
+        table = tk.Frame(parent, bg=BG_CARD)
+        table.pack(fill="both", expand=True, padx=12, pady=12)
+        self.tree = ttk.Treeview(table, columns=("move_no", "white", "black"), show="headings", selectmode="browse")
         self.tree.heading("move_no", text="#")
-        self.tree.column("white", anchor="center", width=120)
         self.tree.heading("white", text="White")
-        self.tree.column("black", anchor="center", width=120)
         self.tree.heading("black", text="Black")
-        # zebra striping tag
+        self.tree.column("move_no", width=48, stretch=False, anchor="center")
+        self.tree.column("white", width=150, anchor="center")
+        self.tree.column("black", width=150, anchor="center")
         self.tree.tag_configure("odd", background="#161C25")
         self.tree.tag_configure("even", background=BG_CARD)
+        self.vsb = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview, style="Dark.Vertical.TScrollbar")
+        self.tree.configure(yscrollcommand=self.vsb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        self.vsb.pack(side="right", fill="y")
+        self.export_pgn_button = self._button(parent, "EXPORT PGN", self.on_export_pgn_button_listener, BG_ELEVATED)
+        self.export_pgn_button.pack(fill="x", padx=16, pady=(0, 12))
 
-        self.export_pgn_button = tk.Button(hist_inner, text="⬇   EXPORT PGN", command=self.on_export_pgn_button_listener,
-                                           font=self.F_BTN_SM, fg=TEXT_SECONDARY, bg=BG_ELEVATED, activebackground=BG_CARD_HI,
-                                           activeforeground=TEXT_PRIMARY, relief="flat", bd=0, padx=10, pady=8, cursor="hand2",
-                                           highlightbackground=BORDER, highlightthickness=1)
-        self.export_pgn_button.pack(fill="x", padx=12, pady=(0,12))
-        def _hover_pgn(e, enter):
-            self.export_pgn_button.configure(bg=BG_CARD_HI if enter else BG_ELEVATED, fg=TEXT_PRIMARY if enter else TEXT_SECONDARY)
-        self.export_pgn_button.bind("<Enter>", lambda e: _hover_pgn(e, True))
-        self.export_pgn_button.bind("<Leave>", lambda e: _hover_pgn(e, False))
+        eval_box = tk.Frame(parent, bg="#10161F", highlightbackground=BORDER, highlightthickness=1)
+        eval_box.pack(fill="x", padx=16, pady=(0, 16))
+        tk.Label(eval_box, text="ENGINE EVALUATION", font=("Segoe UI", 8, "bold"), fg=TEXT_MUTED, bg="#10161F").pack(anchor="w", padx=12, pady=(10, 5))
+        self.eval_text = tk.Label(eval_box, text="—", font=("Consolas", 18, "bold"), fg=TEXT_PRIMARY, bg="#10161F")
+        self.eval_text.pack(anchor="w", padx=12)
+        self._eval_canvas = tk.Canvas(eval_box, height=8, bg=BG_ELEVATED, highlightthickness=0)
+        self._eval_canvas.pack(fill="x", padx=12, pady=8)
+        self._eval_bar = self._eval_canvas.create_rectangle(0, 0, 0, 8, fill=TEXT_MUTED, outline="")
+        stats = tk.Frame(eval_box, bg="#10161F")
+        stats.pack(fill="x", padx=12, pady=(0, 10))
+        self.wdl_text = self._stat(stats, "WDL")
+        self.material_text = self._stat(stats, "MATERIAL")
+        self.white_acc_text = self._stat(stats, "BOT ACC")
+        self.black_acc_text = self._stat(stats, "OPP ACC")
 
-        # footer
-        footer = tk.Frame(hist_inner, bg=BG_CARD)
-        footer.pack(fill="x", padx=12, pady=(0,10))
-        tk.Label(footer, text="Tip: keep this window on top while playing  •  Dark theme", font=("Segoe UI", 7), fg=TEXT_MUTED, bg=BG_CARD, anchor="w").pack(side="left")
+    def _stat(self, parent, name):
+        box = tk.Frame(parent, bg="#10161F")
+        box.pack(side="left", fill="x", expand=True)
+        tk.Label(box, text=name, font=("Segoe UI", 7), fg=TEXT_MUTED, bg="#10161F").pack(anchor="w")
+        value = tk.Label(box, text="—", font=self.F_VALUE, fg=TEXT_PRIMARY, bg="#10161F")
+        value.pack(anchor="w")
+        return value
 
-        # initial eval bar update — defer until geometry is computed
+    def _build_footer(self):
+        bar = tk.Frame(self.master, bg=DANGER_BG, highlightbackground="#4A151A", highlightthickness=1)
+        bar.pack(fill="x", padx=16, pady=(0, 12))
+        tk.Label(bar, text="Emergency stop", fg="#FCA5A5", bg=DANGER_BG, font=self.F_SMALL).pack(side="left", padx=10, pady=7)
+        self.emergency_kill_button = tk.Button(bar, text="KILL BOT + BROWSER", command=self.emergency_kill, font=self.F_BUTTON, fg="white", bg=DANGER, activebackground="#B91C1C", relief="flat", bd=0, padx=12, pady=5, cursor="hand2")
+        self.emergency_kill_button.pack(side="right", padx=7, pady=5)
+        for key in ("<Escape>", "<F12>", "<Control-q>", "<Control-Q>"):
+            self.master.bind(key, lambda _e: self.emergency_kill())
+
+    def _load_state(self):
+        self._config = self._load_config()
+        self.stockfish_path = self._config.get("stockfish_path") or self._load_stockfish_path()
+        self._apply_config_values()
+        self._refresh_stockfish_label()
+        self._setup_config_autosave()
+        self._setup_validation_traces()
+        self.on_manual_mode_checkbox_listener()
+        self._validate_inputs()
         self._update_eval_bar("—")
-        try:
-            self.master.after(100, lambda: self._update_eval_bar("—"))
-            self.master.after(500, lambda: self._update_eval_bar(self.eval_text.cget("text") or "—"))
-        except Exception:
-            pass
+        self.master.after(150, lambda: self._update_eval_bar("—"))
 
-        # Threads daemon so they don't block exit
+    def _refresh_stockfish_label(self):
+        path = self.stockfish_path or "No Stockfish selected"
+        valid = bool(self.stockfish_path and os.path.exists(self.stockfish_path))
+        self.stockfish_path_text.configure(text=path, fg="#6EE7B7" if valid else "#FCA5A5", bg="#0B1E16" if valid else DANGER_BG)
+
+    def _start_background_workers(self):
         threading.Thread(target=self.process_checker_thread, daemon=True).start()
         threading.Thread(target=self.browser_checker_thread, daemon=True).start()
         threading.Thread(target=self.process_communicator_thread, daemon=True).start()
         threading.Thread(target=self.keypress_listener_thread, daemon=True).start()
 
-    # ── UI helpers ─────────────────────────────────
     def _set_status(self, text, color, bg):
         try:
             self.status_text.configure(text=text.upper(), fg=color, bg=bg)
@@ -813,6 +451,11 @@ class GUI:
             return
         self._cleaned = True
         logger.info("GUI cleanup – killing children, closing pipes, quitting chrome")
+        # Persist config on exit (P1)
+        try:
+            self._save_config()
+        except Exception:
+            pass
         self.exit = True
         # Stop bot + overlay
         try:
@@ -1340,6 +983,9 @@ class GUI:
                 try:
                     self.open_browser_button.configure(text="✓  BROWSER OPEN", state="disabled", bg="#1E3A2E", fg="#6EE7B7")
                     self.start_button.configure(state="normal")
+                    # P1: re-validate inputs now that browser is ready
+                    try: self._validate_inputs()
+                    except Exception: pass
                 except tk.TclError as e:
                     logger.debug("success UI update failed: %s", e)
             _ui(_success)
@@ -1641,6 +1287,287 @@ class GUI:
                 return cand
         return os.path.join("src", "config.json")
 
+    # ── Full config persistence (P1: Persist config) ─────────────────
+    def _load_config(self):
+        """Load full GUI config from JSON. Returns dict with defaults merged."""
+        import json as _json
+        defaults = {
+            "stockfish_path": "",
+            "website": "chesscom",
+            "enable_manual_mode": False,
+            "enable_mouseless_mode": False,
+            "enable_non_stop_puzzles": 0,
+            "enable_non_stop_matches": 0,
+            "enable_bongcloud": 0,
+            "mouse_latency": 0.0,
+            "slow_mover": 100,
+            "skill_level": 20,
+            "stockfish_depth": 15,
+            "memory": 512,
+            "cpu_threads": 1,
+            "enable_topmost": 1,
+        }
+        cfg_path = self._config_path()
+        candidates = [cfg_path, "config.json", os.path.join(os.path.expanduser("~"), ".chess-x.json"), os.path.join("src", "config.json")]
+        # deduplicate preserving order
+        seen = set()
+        ordered = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                ordered.append(c)
+        for p in ordered:
+            try:
+                if os.path.exists(p):
+                    with open(p, "r", encoding="utf-8") as fh:
+                        data = _json.load(fh)
+                        if not isinstance(data, dict):
+                            continue
+                        # merge
+                        merged = dict(defaults)
+                        for k in defaults:
+                            if k in data:
+                                merged[k] = data[k]
+                        # stockfish_path backward compat
+                        if "stockfish" in data and not merged.get("stockfish_path"):
+                            merged["stockfish_path"] = data.get("stockfish") or ""
+                        # validate stockfish path exists else clear
+                        sp = merged.get("stockfish_path")
+                        if sp and not os.path.exists(sp):
+                            logger.warning("Saved stockfish path not found on disk: %s", sp)
+                            merged["stockfish_path"] = ""
+                        elif sp and not self._is_valid_stockfish(sp, quick_check=True):
+                            logger.warning("Saved stockfish path invalid: %s", sp)
+                            # keep but warn; don't clear – user may have custom name
+                        # clamp numeric
+                        try:
+                            merged["mouse_latency"] = max(0.0, min(15.0, float(merged["mouse_latency"])))
+                            merged["slow_mover"] = max(10, min(1000, int(merged["slow_mover"])))
+                            merged["skill_level"] = max(0, min(20, int(merged["skill_level"])))
+                            merged["stockfish_depth"] = max(1, min(20, int(merged["stockfish_depth"])))
+                            merged["memory"] = max(16, min(8192, int(merged["memory"])))
+                            merged["cpu_threads"] = max(1, min(32, int(merged["cpu_threads"])))
+                            merged["enable_topmost"] = 1 if int(merged["enable_topmost"]) else 0
+                            merged["website"] = "lichess" if str(merged["website"]).lower() in ("lichess", "lichess.org") else "chesscom"
+                        except Exception:
+                            pass
+                        logger.info("Loaded config from %s", p)
+                        return merged
+            except Exception as e:
+                logger.debug("load config %s failed: %s", p, e)
+        return defaults
+
+    def _save_config(self):
+        """Persist current GUI values to JSON (debounced caller should use _schedule_save)."""
+        import json as _json
+        cfg = self._config_path()
+        try:
+            os.makedirs(os.path.dirname(cfg) if os.path.dirname(cfg) else ".", exist_ok=True)
+            data = {}
+            if os.path.exists(cfg):
+                try:
+                    with open(cfg, "r", encoding="utf-8") as fh:
+                        data = _json.load(fh)
+                        if not isinstance(data, dict):
+                            data = {}
+                except Exception:
+                    data = {}
+            # collect current values
+            try:
+                data["stockfish_path"] = getattr(self, "stockfish_path", "") or ""
+                data["website"] = self.website.get() if hasattr(self, "website") else "chesscom"
+                data["enable_manual_mode"] = bool(self.enable_manual_mode.get()) if hasattr(self, "enable_manual_mode") else False
+                data["enable_mouseless_mode"] = bool(self.enable_mouseless_mode.get()) if hasattr(self, "enable_mouseless_mode") else False
+                data["enable_non_stop_puzzles"] = int(self.enable_non_stop_puzzles.get()) if hasattr(self, "enable_non_stop_puzzles") else 0
+                data["enable_non_stop_matches"] = int(self.enable_non_stop_matches.get()) if hasattr(self, "enable_non_stop_matches") else 0
+                data["enable_bongcloud"] = int(self.enable_bongcloud.get()) if hasattr(self, "enable_bongcloud") else 0
+                data["mouse_latency"] = float(self.mouse_latency.get()) if hasattr(self, "mouse_latency") else 0.0
+                data["slow_mover"] = int(self.slow_mover.get()) if hasattr(self, "slow_mover") else 100
+                data["skill_level"] = int(self.skill_level.get()) if hasattr(self, "skill_level") else 20
+                data["stockfish_depth"] = int(self.stockfish_depth.get()) if hasattr(self, "stockfish_depth") else 15
+                data["memory"] = int(self.memory.get()) if hasattr(self, "memory") else 512
+                data["cpu_threads"] = int(self.cpu_threads.get()) if hasattr(self, "cpu_threads") else 1
+                data["enable_topmost"] = int(self.enable_topmost.get()) if hasattr(self, "enable_topmost") else 1
+            except Exception as e:
+                logger.debug("_save_config collect error: %s", e)
+            with open(cfg, "w", encoding="utf-8") as fh:
+                _json.dump(data, fh, indent=2)
+            logger.debug("Saved config to %s", cfg)
+        except Exception as e:
+            logger.debug("save config failed: %s", e)
+
+    def _apply_config_values(self):
+        """Apply loaded config dict to tkinter variables (call after vars created)."""
+        cfg = getattr(self, "_config", {}) or {}
+        try:
+            if "website" in cfg:
+                try: self.website.set(cfg["website"])
+                except Exception: pass
+            if "enable_manual_mode" in cfg:
+                try: self.enable_manual_mode.set(bool(cfg["enable_manual_mode"]))
+                except Exception: pass
+            if "enable_mouseless_mode" in cfg:
+                try: self.enable_mouseless_mode.set(bool(cfg["enable_mouseless_mode"]))
+                except Exception: pass
+            if "enable_non_stop_puzzles" in cfg:
+                try: self.enable_non_stop_puzzles.set(int(cfg["enable_non_stop_puzzles"]))
+                except Exception: pass
+            if "enable_non_stop_matches" in cfg:
+                try: self.enable_non_stop_matches.set(int(cfg["enable_non_stop_matches"]))
+                except Exception: pass
+            if "enable_bongcloud" in cfg:
+                try: self.enable_bongcloud.set(int(cfg["enable_bongcloud"]))
+                except Exception: pass
+            if "mouse_latency" in cfg:
+                try: self.mouse_latency.set(float(cfg["mouse_latency"]))
+                except Exception: pass
+            if "slow_mover" in cfg:
+                try: self.slow_mover.set(int(cfg["slow_mover"]))
+                except Exception: pass
+            if "skill_level" in cfg:
+                try: self.skill_level.set(int(cfg["skill_level"]))
+                except Exception: pass
+            if "stockfish_depth" in cfg:
+                try: self.stockfish_depth.set(int(cfg["stockfish_depth"]))
+                except Exception: pass
+            if "memory" in cfg:
+                try: self.memory.set(int(cfg["memory"]))
+                except Exception: pass
+            if "cpu_threads" in cfg:
+                try: self.cpu_threads.set(int(cfg["cpu_threads"]))
+                except Exception: pass
+            if "enable_topmost" in cfg:
+                try:
+                    self.enable_topmost.set(int(cfg["enable_topmost"]))
+                    # apply topmost immediately
+                    try:
+                        self.master.attributes("-topmost", bool(int(cfg["enable_topmost"])))
+                    except Exception: pass
+                except Exception: pass
+            # need to refresh manual mode visibility
+            try: self.on_manual_mode_checkbox_listener()
+            except Exception: pass
+        except Exception as e:
+            logger.debug("_apply_config_values error: %s", e)
+
+    def _schedule_save(self, *a):
+        """Debounce save: coalesce rapid var changes into single disk write after 400ms."""
+        try:
+            if hasattr(self, "_save_after_id") and self._save_after_id:
+                try: self.master.after_cancel(self._save_after_id)
+                except Exception: pass
+            self._save_after_id = self.master.after(400, self._save_config)
+        except Exception:
+            try: self._save_config()
+            except Exception: pass
+
+    def _setup_config_autosave(self):
+        """Wire traces on all persisted vars so changes auto-save."""
+        try:
+            for var in [self.website, self.enable_manual_mode, self.enable_mouseless_mode,
+                        self.enable_non_stop_puzzles, self.enable_non_stop_matches,
+                        self.enable_bongcloud, self.mouse_latency, self.slow_mover,
+                        self.skill_level, self.stockfish_depth, self.memory, self.cpu_threads,
+                        self.enable_topmost]:
+                try: var.trace_add("write", lambda *a: self._schedule_save())
+                except Exception:
+                    try: var.trace("w", lambda *a: self._schedule_save())
+                    except Exception: pass
+        except Exception as e:
+            logger.debug("autosave setup failed: %s", e)
+
+    # ── P1: Input validation – live error hints, clamp, disable Start until valid ─
+    def _validate_inputs(self, *a):
+        """Validate all numeric entries; show red border on error and toggle Start button."""
+        valid = True
+        cpu = os.cpu_count() or 4
+        # Stockfish path must exist if Start is to be enabled (Browser can still open without)
+        try:
+            has_sf = bool(self.stockfish_path and os.path.exists(self.stockfish_path))
+        except Exception:
+            has_sf = False
+        # Check Slow Mover 10-1000
+        try:
+            sm = int(self.slow_mover.get())
+            if sm < 10 or sm > 1000:
+                valid = False
+                try: self.slow_mover_entry.configure(highlightbackground=DANGER, highlightcolor=DANGER)
+                except Exception: pass
+            else:
+                try: self.slow_mover_entry.configure(highlightbackground=BORDER, highlightcolor=BORDER)
+                except Exception: pass
+        except Exception:
+            valid = False
+            try: self.slow_mover_entry.configure(highlightbackground=DANGER, highlightcolor=DANGER)
+            except Exception: pass
+        # Memory 16-8192
+        try:
+            mem = int(self.memory.get())
+            if mem < 16 or mem > 8192:
+                valid = False
+                try: self.memory_entry.configure(highlightbackground=DANGER, highlightcolor=DANGER)
+                except Exception: pass
+            else:
+                try: self.memory_entry.configure(highlightbackground=BORDER, highlightcolor=BORDER)
+                except Exception: pass
+        except Exception:
+            valid = False
+        # Threads 1 - cpu*2, warn if > cpu_count
+        try:
+            thr = int(self.cpu_threads.get())
+            if thr < 1 or thr > 32:
+                valid = False
+                try: self.cpu_threads_entry.configure(highlightbackground=DANGER, highlightcolor=DANGER)
+                except Exception: pass
+            elif thr > cpu:
+                try: self.cpu_threads_entry.configure(highlightbackground=WARNING, highlightcolor=WARNING)
+                except Exception: pass
+            else:
+                try: self.cpu_threads_entry.configure(highlightbackground=BORDER, highlightcolor=BORDER)
+                except Exception: pass
+            # Prevent Threads > cpu*2 silently
+            if thr > cpu*2:
+                valid = False
+        except Exception:
+            valid = False
+        # Skill/Depth already via scales (0-20,1-20) so always valid
+
+        # If browser not opened, Start remains disabled regardless
+        can_start = valid and has_sf and getattr(self, "opened_browser", False) and not getattr(self, "running", False)
+        # But allow Start to be enabled once browser opened; disable if invalid
+        try:
+            if not self.opened_browser:
+                # keep Start disabled until browser opened
+                self.start_button.configure(state="disabled", disabledforeground="#7A6AA0")
+            elif not valid or not has_sf:
+                self.start_button.configure(state="disabled", disabledforeground="#FCA5A5")
+            else:
+                if not self.running:
+                    self.start_button.configure(state="normal")
+        except Exception as e:
+            logger.debug("_validate_inputs button toggle failed: %s", e)
+        return valid
+
+    def _setup_validation_traces(self):
+        """Call after widgets exist to wire live validation + Start toggle."""
+        try:
+            for var in [self.slow_mover, self.memory, self.cpu_threads, self.skill_level, self.stockfish_depth, self.mouse_latency]:
+                try: var.trace_add("write", self._validate_inputs)
+                except Exception:
+                    try: var.trace("w", lambda *a: self._validate_inputs())
+                    except Exception: pass
+            # Also validate when stockfish path changes (via _save_config)
+            # Poll stockfish_path via after
+            def _poll_sf():
+                try: self._validate_inputs()
+                except Exception: pass
+                try: self.master.after(1000, _poll_sf)
+                except Exception: pass
+            try: self.master.after(800, _poll_sf)
+            except Exception: pass
+        except Exception as e:
+            logger.debug("validation traces setup failed: %s", e)
+
     def _is_valid_stockfish(self, path, quick_check=True):
         """Validate that path points to a real Stockfish binary (not a .py etc)."""
         try:
@@ -1702,29 +1629,21 @@ class GUI:
         return ""
 
     def _save_stockfish_path(self, path):
-        # Do not persist invalid stockfish paths
+        # Do not persist invalid stockfish paths – delegate to full config save
         if path and not self._is_valid_stockfish(path, quick_check=True):
-            # Allow saving only if deeper check passes (non-standard names)
             if not self._is_valid_stockfish(path, quick_check=False):
                 logger.warning("Refusing to save invalid Stockfish path: %s", path)
                 return
-        import json as _json
-        cfg = self._config_path()
+        # Update instance and persist full config
+        self.stockfish_path = path
         try:
-            os.makedirs(os.path.dirname(cfg) if os.path.dirname(cfg) else ".", exist_ok=True)
-            data = {}
-            if os.path.exists(cfg):
-                try:
-                    with open(cfg, "r", encoding="utf-8") as fh:
-                        data = _json.load(fh)
-                except Exception:
-                    data = {}
-            data["stockfish_path"] = path
-            with open(cfg, "w", encoding="utf-8") as fh:
-                _json.dump(data, fh, indent=2)
-            logger.info("Saved stockfish path to %s", cfg)
-        except Exception as e:
-            logger.debug("save config failed: %s", e)
+            # also update _config cache
+            if hasattr(self, "_config") and isinstance(self._config, dict):
+                self._config["stockfish_path"] = path
+        except Exception:
+            pass
+        self._save_config()
+        logger.info("Saved stockfish path to %s", self._config_path())
 
     def _auto_find_stockfish(self):
         import shutil
@@ -1891,6 +1810,9 @@ class GUI:
         except Exception as e:
             logger.warning("Stockfish validation failed for %s: %s", f, e)
             messagebox.showwarning("Warning", f"Selected file may not be valid Stockfish:\n{e}\n\nYou can download Stockfish from https://stockfishchess.org/download/")
+        # P1: live validation refresh
+        try: self._validate_inputs()
+        except Exception: pass
 
     def clear_tree(self):
         try:

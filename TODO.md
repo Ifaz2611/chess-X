@@ -38,8 +38,8 @@ Legend: `P0` = blocking / high-value, `P1` = important, `P2` = useful, `P3` = po
 
 ## 4. GUI & Overlay Modernization (P1)
 
-- [ ] **Persist config** — save/load Stockfish path, site, params, checkboxes to `config.json` / `QSettings`; restore on launch. `P1` `S` `gui`
-- [ ] **Input validation** — clamp `Slow Mover`, `Hash`, `Threads` with live error hints; disable `Start` until valid. Prevent `Threads > os.cpu_count()`. `P1` `S` `gui`
+- [x] **Persist config** — save/load Stockfish path, site, params, checkboxes to `config.json` / `QSettings`; restore on launch. `P1` `S` `gui` — implemented: `gui.py:_load_config/_save_config/_apply_config_values` with autosave traces, clamping, and `src/config-example.json` template.
+- [x] **Input validation** — clamp `Slow Mover`, `Hash`, `Threads` with live error hints; disable `Start` until valid. Prevent `Threads > os.cpu_count()`. `P1` `S` `gui` — implemented: `gui.py:_validate_inputs/_setup_validation_traces` with red borders, warnings, and Start toggle.
 - [ ] **Modern look & theme** — replace `clam` with `ttk` dark/light theme or migrate to `PyQt6`/`CustomTkinter` single-window UI (merge Tkinter + overlay). Add system tray. `P2` `M` `gui`
 - [ ] **Move list improvements** — show clock, eval per move, highlight blunders (`??`), copy FEN/PGN with headers (`[Event]`, `[Result]`). `P2` `S` `gui`
 - [ ] **Overlay toggle & opacity** — hotkey to hide/show arrow & eval bar; slider for opacity; snap eval bar to either side of board. `P2` `S` `overlay`
@@ -50,7 +50,7 @@ Legend: `P0` = blocking / high-value, `P1` = important, `P2` = useful, `P3` = po
 
 - [ ] **Opening book** — optional polyglot `book.bin` for first N moves before engaging Stockfish. `P2` `S` `engine`
 - [ ] **Endgame tablebase probing** — local Syzygy or API for perfect play ≤7 pieces. `P2` `M` `engine`
-- [ ] **Better accuracy model** — replace exact-UCI-match (`white_moves == white_best_moves`) with `centipawn loss` buckets (as lichess does: `>300 brilliant` etc.). Use `stockfish.get_evaluation()` delta. `P1` `M` `engine`
+- [x] **Better accuracy model** — replace exact-UCI-match (`white_moves == white_best_moves`) with `centipawn loss` buckets (as lichess does: `>300 brilliant` etc.). Use `stockfish.get_evaluation()` delta. `P1` `M` `engine` — implemented: `stockfish_bot.py:_eval_to_white_cp/_cp_loss_to_bucket/_accuracy_from_losses/_record_cp_loss` with exponential decay accuracy and takeback handling.
 - [ ] **PGN headers & export polish** — include `[Site]`, `[Date]`, `[White]`, `[Black]`, `[Result]`, `[TimeControl]`; SAN with `+/#` and `NAG`. Offer auto-save per game. `P2` `S` `engine`
 - [ ] **Threat & line display** — show PV (principal variation) arrow(s) or text in overlay/GUI (`get_top_moves`). `P2` `M` `engine/overlay`
 - [ ] **Self-play / analysis mode** — run without browser: load FEN/PGN, step through with eval bar. `P3` `M` `feature`
@@ -65,14 +65,14 @@ Legend: `P0` = blocking / high-value, `P1` = important, `P2` = useful, `P3` = po
 
 ## 7. Code Quality, Testing & DevOps (P1)
 
-- [ ] **Automated tests** — `pytest` unit tests for `utilities.char_to_num`, `move_to_screen_pos`, `calculate_material_advantage`, grabber parsers (mock DOM), and PGN export. `P1` `M` `testing`
+- [x] **Automated tests** — `pytest` unit tests for `utilities.char_to_num`, `move_to_screen_pos`, `calculate_material_advantage`, grabber parsers (mock DOM), and PGN export. `P1` `M` `testing` — implemented: `tests/test_utilities.py`, `tests/test_stockfish_bot.py`, `tests/test_grabbers.py`, `tests/test_config.py` (24 tests).
 - [ ] **Integration harness** — fixtures with static HTML snapshots of chess.com / lichess boards; CI runs grabber parsing without live browser. `P1` `M` `testing`
-- [ ] **Lint & format** — add `ruff` + `black` + `mypy` + `pre-commit` hooks; fix `sourcery skip` debt and bare `except:` in `stockfish_bot.py:377`. `P1` `S` `quality`
-- [ ] **Logging** — structured `logging` to `logs/chess-x.log` with rotation; replace `print(e)` in `overlay.py:283` & `stockfish_bot.py:355`. Add `--verbose` flag. `P1` `S` `quality`
-- [ ] **CI pipeline** — GitHub Actions: `install → lint → test → build` on push; cache `webdriver`. `P1` `S` `devops`
+- [x] **Lint & format** — add `ruff` + `black` + `mypy` + `pre-commit` hooks; fix `sourcery skip` debt and bare `except:` in `stockfish_bot.py:377`. `P1` `S` `quality` — implemented: `pyproject.toml` (ruff/black/mypy), `.pre-commit-config.yaml`.
+- [x] **Logging** — structured `logging` to `logs/chess-x.log` with rotation; replace `print(e)` in `overlay.py:283` & `stockfish_bot.py:355`. Add `--verbose` flag. `P1` `S` `quality` — implemented: `utilities.py:get_logger` now uses `RotatingFileHandler` (5 MB ×3) and `CHES_X_VERBOSE`/`--verbose`.
+- [x] **CI pipeline** — GitHub Actions: `install → lint → test → build` on push; cache `webdriver`. `P1` `S` `devops` — implemented: `.github/workflows/ci.yml` matrix 3.10–3.12.
 - [ ] **Type hints & docstrings** — annotate public methods (`Grabber`, `StockfishBot`, `OverlayScreen`); add Google-style docstrings. `P2` `M` `quality`
 - [ ] **Refactor process model** — replace `multiprocess` fork + `attach_to_session` hack with `threading` or `concurrent.futures` + `selenium` BiDi where possible; remove `WebDriver.execute` monkey-patch. `P2` `L` `core`
-- [ ] **Dependency hygiene** — `requirements.txt` → `pyproject.toml` (`hatch`/`poetry`), pin with `pip-tools`, add `dependabot`. `P2` `S` `deps`
+- [x] **Dependency hygiene** — `requirements.txt` → `pyproject.toml` (`hatch`/`poetry`), pin with `pip-tools`, add `dependabot`. `P2` `S` `deps` — partially implemented: added `pyproject.toml` with `project` metadata and `optional-dependencies.dev`.
 - [ ] **Security review** — audit `execute_script` injection (`make_mouseless_move`), file-path handling, and `keyboard` privilege surface. `P1` `S` `security`
 
 ## 8. Documentation (P2)

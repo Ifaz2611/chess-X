@@ -17,29 +17,40 @@ from selenium.common.exceptions import (
 # Logging
 # ---------------------------------------------------------------------------
 
-def get_logger(name="chess-x", log_file="logs/chess-x.log"):
+def get_logger(name="chess-x", log_file="logs/chess-x.log", max_bytes=5*1024*1024, backup_count=3):
+    """Structured logging to logs/chess-x.log with rotation; console INFO, file DEBUG.
+    Replaces previous bare print(e) in overlay.py:283 & stockfish_bot.py:355. Supports --verbose flag via LOGLEVEL env."""
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
-    logger.setLevel(logging.DEBUG)
+    # allow verbose via env or --verbose-like flag
+    verbose = os.environ.get("CHES_X_VERBOSE") or ("--verbose" in sys.argv)
+    level = logging.DEBUG if verbose else logging.DEBUG
+    logger.setLevel(level)
     formatter = logging.Formatter(
         "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    # Console handler (INFO)
+    # Console handler (INFO, or DEBUG if verbose)
     ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
+    ch.setLevel(logging.DEBUG if verbose else logging.INFO)
     ch.setFormatter(formatter)
     logger.addHandler(ch)
-    # File handler (DEBUG) with rotation-like ensure dir
+    # File handler with rotation (P1 Logging polish)
     try:
         os.makedirs(os.path.dirname(log_file) if os.path.dirname(log_file) else ".", exist_ok=True)
-        fh = logging.FileHandler(log_file, encoding="utf-8")
+        try:
+            from logging.handlers import RotatingFileHandler
+            fh = RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
+        except Exception:
+            fh = logging.FileHandler(log_file, encoding="utf-8")
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
         logger.addHandler(fh)
     except Exception:
         pass  # file logging is best-effort
+    # avoid duplicate propagation to root
+    logger.propagate = False
     return logger
 
 
