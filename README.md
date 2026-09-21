@@ -71,7 +71,6 @@ Tkinter panel, global hotkeys, PGN export, and live accuracy / WDL / material tr
 
 - [How It Works](#-how-it-works)
 - [Features](#-features)
-- [Screenshots & Demo](#-screenshots--demo)
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
 - [Installation](#-installation)
@@ -152,20 +151,6 @@ flowchart LR
 | | Best‑move arrow | ✅ | ✅ | Red translucent polygon |
 | | Move list treeview | ✅ | ✅ | Auto‑scroll |
 | | Always on top | ✅ | ✅ | Toggleable |
-
----
-
-## Screenshots & Demo
-
-> [!NOTE]
-> Drop your captures into `docs/screenshots/` and they'll render below. Remove this section if you don't have them yet.
-
-| | |
-|---|---|
-| <img src="docs/screenshots/gui.png" width="420" /> | **Control panel** — engine settings, move list, live eval labels. |
-| <img src="docs/screenshots/overlay.png" width="420" /> | **Overlay** — best‑move arrow + vertical evaluation bar. |
-| <img src="docs/screenshots/chesscom.gif" width="420" /> | **chess.com** — casual game / puzzle run. |
-| <img src="docs/screenshots/lichess-mouseless.gif" width="420" /> | **Lichess mouseless** — playing while the browser is minimized. |
 
 ---
 
