@@ -12,7 +12,6 @@ dependencies = [
     "multiprocess>=0.70",
     "keyboard>=0.13.5",
     "PyQt6>=6.7",
-    "pynput>=1.8",
     "packaging>=24",
 ]
 
