@@ -102,7 +102,7 @@ export QT_QPA_PLATFORM=offscreen  # for headless tests only
 | **Platform** | Pick site *before* opening browser |
 | **Controls** → `OPEN BROWSER` | Launches managed Chrome (auto-downloads driver) |
 | **Controls** → `START ENGINE` | Enabled only after browser open *and* valid Stockfish path |
-| **Modes** | `Manual`, `Mouseless` (Lichess only), `Non-stop puzzles/matches`, `Bongcloud` (plays e3/e6) |
+| **Modes** | `Manual`, `Mouseless` (Lichess only), `Non-stop puzzles/matches` |
 | **Stockfish** | `Slow Mover 10–1000` (lower = faster), `Skill 0–20`, `Depth 1–20`. Hash/Threads are now auto-managed. |
 | **Engine binary** | Shows current path; `SELECT STOCKFISH`; `Keep window on top` |
 | **Move History** | `# / White / Black` — auto-scrolls |
@@ -159,4 +159,3 @@ Example `src/config-example.json`:
 - Open an Issue if you find a DOM breakage — include OS, Python version, Chrome version, and last lines of `logs/chess-x.log`
 
 **Have fun and play fair!** Use this against bots or for post-game analysis — not against humans in rated play.
-

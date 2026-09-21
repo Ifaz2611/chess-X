@@ -258,7 +258,6 @@ class GUI:
         self.enable_mouseless_mode = tk.BooleanVar(value=False)
         self.enable_non_stop_puzzles = tk.IntVar(value=0)
         self.enable_non_stop_matches = tk.IntVar(value=0)
-        self.enable_bongcloud = tk.IntVar(value=0)
         self.mouse_latency = tk.DoubleVar(value=0.0)
         self.slow_mover = tk.IntVar(value=60)
         self.skill_level = tk.IntVar(value=20)
@@ -295,7 +294,6 @@ class GUI:
         self._check(modes, "Mouseless mode  (Lichess only)", self.enable_mouseless_mode).pack(fill="x")
         self._check(modes, "Non-stop puzzles", self.enable_non_stop_puzzles).pack(fill="x")
         self._check(modes, "Non-stop online matches", self.enable_non_stop_matches).pack(fill="x")
-        self._check(modes, "Bongcloud", self.enable_bongcloud).pack(fill="x")
         tk.Label(modes, text="Mouse latency", fg=TEXT_MUTED, bg=BG_CARD, font=self.F_LABEL).pack(anchor="w", pady=(8, 0))
         self.mouse_latency_scale = tk.Scale(modes, from_=0, to=15, resolution=.2, variable=self.mouse_latency, orient="horizontal", bg=BG_CARD, fg=TEXT_MUTED, troughcolor=BG_ELEVATED, activebackground=ACCENT, highlightthickness=0, bd=0, showvalue=True)
         self.mouse_latency_scale.pack(fill="x")
@@ -1301,7 +1299,7 @@ class GUI:
             self.chrome_url, self.chrome_session_id, self.website.get(), child_conn, st_ov_queue,
             self.stockfish_path, self.enable_manual_mode.get() == 1, self.enable_mouseless_mode.get() == 1,
             self.enable_non_stop_puzzles.get() == 1, self.enable_non_stop_matches.get() == 1,
-            self.mouse_latency.get(), self.enable_bongcloud.get() == 1, self.slow_mover.get(),
+            self.mouse_latency.get(), self.slow_mover.get(),
             self.skill_level.get(), self.stockfish_depth.get(),
         )
         self.stockfish_bot_process.start()
@@ -1515,7 +1513,6 @@ class GUI:
                 "enable_mouseless_mode": False,
                 "enable_non_stop_puzzles": 0,
                 "enable_non_stop_matches": 0,
-                "enable_bongcloud": 0,
                 "mouse_latency": 0.0,
                 "slow_mover": 60,
                 "skill_level": 20,
@@ -1536,7 +1533,6 @@ class GUI:
                 kw["enable_mouseless_mode"] = bool(self.enable_mouseless_mode.get()) if hasattr(self, "enable_mouseless_mode") else False
                 kw["enable_non_stop_puzzles"] = int(self.enable_non_stop_puzzles.get()) if hasattr(self, "enable_non_stop_puzzles") else 0
                 kw["enable_non_stop_matches"] = int(self.enable_non_stop_matches.get()) if hasattr(self, "enable_non_stop_matches") else 0
-                kw["enable_bongcloud"] = int(self.enable_bongcloud.get()) if hasattr(self, "enable_bongcloud") else 0
                 kw["mouse_latency"] = float(self.mouse_latency.get()) if hasattr(self, "mouse_latency") else 0.0
                 kw["slow_mover"] = int(self.slow_mover.get()) if hasattr(self, "slow_mover") else 60
                 kw["skill_level"] = int(self.skill_level.get()) if hasattr(self, "skill_level") else 20
@@ -1567,9 +1563,6 @@ class GUI:
                 except Exception: pass
             if "enable_non_stop_matches" in cfg:
                 try: self.enable_non_stop_matches.set(int(cfg["enable_non_stop_matches"]))
-                except Exception: pass
-            if "enable_bongcloud" in cfg:
-                try: self.enable_bongcloud.set(int(cfg["enable_bongcloud"]))
                 except Exception: pass
             if "mouse_latency" in cfg:
                 try: self.mouse_latency.set(float(cfg["mouse_latency"]))
@@ -1615,7 +1608,7 @@ class GUI:
         try:
             for var in [self.website, self.enable_manual_mode, self.enable_mouseless_mode,
                         self.enable_non_stop_puzzles, self.enable_non_stop_matches,
-                        self.enable_bongcloud, self.mouse_latency, self.slow_mover,
+                        self.mouse_latency, self.slow_mover,
                         self.skill_level, self.stockfish_depth,
                         self.enable_topmost]:
                 try: var.trace_add("write", lambda *a: self._schedule_save())

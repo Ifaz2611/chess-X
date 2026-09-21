@@ -10,7 +10,6 @@ Schema v2 (current):
   enable_mouseless_mode: bool = False
   enable_non_stop_puzzles: int = 0
   enable_non_stop_matches: int = 0
-  enable_bongcloud: int = 0
   mouse_latency: float = 0.0
   slow_mover: int = 100
   skill_level: int = 20
@@ -45,7 +44,6 @@ DEFAULTS: dict[str, Any] = {
     "enable_mouseless_mode": False,
     "enable_non_stop_puzzles": 0,
     "enable_non_stop_matches": 0,
-    "enable_bongcloud": 0,
     "mouse_latency": 0.0,
     "slow_mover": 60,
     "skill_level": 20,
@@ -66,7 +64,6 @@ class Config:
     enable_mouseless_mode: bool = False
     enable_non_stop_puzzles: int = 0
     enable_non_stop_matches: int = 0
-    enable_bongcloud: int = 0
     mouse_latency: float = 0.0
     slow_mover: int = 60
     skill_level: int = 20
@@ -145,7 +142,7 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
             out[k] = bool(out[k])
         except Exception:
             out[k] = bool(DEFAULTS[k])
-    for k in ("enable_non_stop_puzzles", "enable_non_stop_matches", "enable_bongcloud", "enable_topmost"):
+    for k in ("enable_non_stop_puzzles", "enable_non_stop_matches", "enable_topmost"):
         try:
             out[k] = 1 if int(out[k]) else 0
         except Exception:

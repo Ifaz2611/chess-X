@@ -29,7 +29,7 @@ if _kb is None:
 
 
 class StockfishBot(multiprocess.Process):
-    def __init__(self, chrome_url, chrome_session_id, website, pipe, overlay_queue, stockfish_path, enable_manual_mode, enable_mouseless_mode, enable_non_stop_puzzles, enable_non_stop_matches, mouse_latency, bongcloud, slow_mover, skill_level, stockfish_depth, memory=None, cpu_threads=None):
+    def __init__(self, chrome_url, chrome_session_id, website, pipe, overlay_queue, stockfish_path, enable_manual_mode, enable_mouseless_mode, enable_non_stop_puzzles, enable_non_stop_matches, mouse_latency, slow_mover, skill_level, stockfish_depth, memory=None, cpu_threads=None):
         multiprocess.Process.__init__(self)
         self.chrome_url = chrome_url
         self.chrome_session_id = chrome_session_id
@@ -42,7 +42,6 @@ class StockfishBot(multiprocess.Process):
         self.enable_non_stop_puzzles = enable_non_stop_puzzles
         self.enable_non_stop_matches = enable_non_stop_matches
         self.mouse_latency = mouse_latency
-        self.bongcloud = bongcloud
         self.slow_mover = slow_mover
         self.skill_level = skill_level
         self.stockfish_depth = stockfish_depth
@@ -562,44 +561,27 @@ class StockfishBot(multiprocess.Process):
                     return
                 if (self.is_white and board.turn == chess.WHITE) or (not self.is_white and board.turn == chess.BLACK):
                     move = None
-                    move_count = len(board.move_stack)
-                    if self.bongcloud and move_count <= 3:
-                        if move_count == 0:
-                            move = "e2e3"
-                        elif move_count == 1:
-                            move = "e7e6"
-                        elif move_count == 2:
-                            move = "e1e2"
-                        elif move_count == 3:
-                            move = "e8e7"
-                        if move and not board.is_legal(chess.Move.from_uci(move)):
-                            # FAST: time-limited instead of depth-blocking
-                            try:
-                                move = stockfish.get_best_move_time(150)
-                            except Exception:
-                                move = stockfish.get_best_move()
-                    else:
+                    try:
+                        # FAST: time-limited search keeps bullet/blitz responsive
+                        # Depth 20 blocking can take >1s; movetime 150-300ms is much faster
+                        # Scale by slow_mover so high slow_mover still gets a bit more time
+                        if self.slow_mover < 60:
+                            _mt = 100
+                        elif self.slow_mover < 100:
+                            _mt = 150
+                        elif self.stockfish_depth >= 18:
+                            _mt = 300
+                        else:
+                            _mt = 200
                         try:
-                            # FAST: time-limited search keeps bullet/blitz responsive
-                            # Depth 20 blocking can take >1s; movetime 150-300ms is much faster
-                            # Scale by slow_mover so high slow_mover still gets a bit more time
-                            if self.slow_mover < 60:
-                                _mt = 100
-                            elif self.slow_mover < 100:
-                                _mt = 150
-                            elif self.stockfish_depth >= 18:
-                                _mt = 300
-                            else:
-                                _mt = 200
-                            try:
-                                move = stockfish.get_best_move_time(_mt)
-                            except Exception:
-                                move = stockfish.get_best_move()
-                        except Exception as e:
-                            logger.error("get_best_move failed: %s", e)
-                            self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
-                            time.sleep(0.2)
-                            continue
+                            move = stockfish.get_best_move_time(_mt)
+                        except Exception:
+                            move = stockfish.get_best_move()
+                    except Exception as e:
+                        logger.error("get_best_move failed: %s", e)
+                        self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
+                        time.sleep(0.2)
+                        continue
 
                     if not move:
                         logger.warning("get_best_move returned None/empty")

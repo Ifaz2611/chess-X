@@ -14,7 +14,6 @@ def test_config_roundtrip(tmp_path, monkeypatch):
         "enable_mouseless_mode": False,
         "enable_non_stop_puzzles": 1,
         "enable_non_stop_matches": 0,
-        "enable_bongcloud": 1,
         "mouse_latency": 1.5,
         "slow_mover": 200,
         "skill_level": 10,
@@ -49,7 +48,6 @@ def test_config_roundtrip(tmp_path, monkeypatch):
     dummy.enable_mouseless_mode = Var(True)
     dummy.enable_non_stop_puzzles = Var(0)
     dummy.enable_non_stop_matches = Var(1)
-    dummy.enable_bongcloud = Var(0)
     dummy.mouse_latency = Var(2.0)
     dummy.slow_mover = Var(150)
     dummy.skill_level = Var(15)

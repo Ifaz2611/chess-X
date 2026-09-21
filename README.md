@@ -119,7 +119,7 @@ flowchart LR
 | 1 | **Control** | `src/gui.py:18` | Pick Stockfish binary, target site, engine tuning. Manages two child processes over `Pipe` + `Queue`. |
 | 2 | **Browser** | `src/gui.py:536` | Launches ChromeDriver, navigates to the site, hands the session URL + ID to the bot process. |
 | 3 | **Grab** | `src/grabbers/*` | Site‑specific DOM scraping: `get_board()`, `get_move_list()`, `is_white()`, game‑over detection. Attaches via `attach_to_session`. |
-| 4 | **Think** | `src/stockfish_bot.py:15` | Syncs SAN moves into a `chess.Board`, calls `get_best_move()` with configured depth/skill/threads/hash. Handles promotion, bongcloud, manual/mouseless. |
+| 4 | **Think** | `src/stockfish_bot.py:15` | Syncs SAN moves into a `chess.Board`, calls `get_best_move()` with configured depth/skill/threads/hash. Handles promotion, manual/mouseless. |
 | 5 | **Act** | `src/stockfish_bot.py:75` | Maps UCI squares → screen pixels with board‑flip compensation, then drags (or sends `lichess.socket.ws`). Respects `mouse_latency`. |
 | 6 | **Render** | `src/overlay.py:9` | Transparent click‑through window draws a `QPolygon` arrow and a board‑aligned eval bar. |
 
@@ -136,7 +136,6 @@ flowchart LR
 | **Modes** | Manual (hold `3`) | ✅ | ✅ | Shows arrow, waits for key |
 | | Mouseless (background) | ❌ | ✅ | WebSocket injection, works minimized |
 | | Non‑stop online matches | ❌ | ✅ | Auto‑clicks `New opponent` |
-| | Bongcloud | ✅ | ✅ | Plays `e3/e6/Ke2/Ke7` if legal |
 | **Tuning** | Mouse latency `0–15s` | ✅ | ✅ | `0.2s` steps |
 | | Skill `0–20` | ✅ | ✅ | Stockfish `Skill Level` |
 | | Depth `1–20` | ✅ | ✅ | Search depth |
@@ -319,7 +318,6 @@ flowchart LR
 | Mouseless Mode | Checkbox | off | Lichess only |
 | Non‑stop puzzles | Checkbox | off | Lichess only |
 | Non‑stop online matches | Checkbox | off | Lichess only |
-| Bongcloud | Checkbox | off | Forces `e3/e6/Ke2/Ke7` if legal |
 | Mouse Latency | Slider | `0.0`–`15.0s` | Sleep before `dragTo` |
 | Skill Level | Slider | `0`–`20` | Stockfish skill |
 | Depth | Slider | `1`–`20` | Search depth |
@@ -357,7 +355,6 @@ flowchart LR
 | `Mouseless Mode` | checkbox | off | Lichess only — plays via `lichess.socket.ws.send` |
 | `Non-stop puzzles` | checkbox | off | Lichess only — auto `Continue training` |
 | `Non-stop online matches` | checkbox | off | Lichess only — auto `New opponent` |
-| `Bongcloud` | checkbox | off | Forces the meme line when legal |
 | `Mouse Latency` | scale | `0.0` | `time.sleep` before `dragTo` |
 | `Slow Mover` | entry | `100` | Stockfish `Slow Mover` UCI option |
 | `Skill Level` | scale | `20` | Stockfish skill |
@@ -535,7 +532,7 @@ Offline HTML fixtures under `tests/fixtures/` let grabber tests run without a br
 Manual checklist before a release:
 
 - [ ] Board, colour, move‑list, and game‑over detection on both sites
-- [ ] Manual, mouseless, bongcloud, puzzle, and non‑stop modes
+- [ ] Manual, mouseless, puzzle, and non‑stop modes
 - [ ] Promotion, castling, en passant, board flip
 - [ ] PGN export + overlay rendering
 
