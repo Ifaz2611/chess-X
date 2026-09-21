@@ -27,6 +27,9 @@ class LichessGrabber(Grabber):
         (By.XPATH, '//*[@id="main-wrap"]/main/div[1]/rm6/l4x'),
         (By.CSS_SELECTOR, ".mselect + rm6 l4x"),
         (By.CSS_SELECTOR, "l4x"),
+        # Fallbacks for obfuscated builds (tags like aPp, i5d, Z7yx etc. change each deploy)
+        # These try to locate the moves container via the stable active class .a1t
+        (By.CSS_SELECTOR, ".a1t"),
     ]
 
     PUZZLE_MOVE_LIST_SELECTORS = [
@@ -145,7 +148,141 @@ class LichessGrabber(Grabber):
                 continue
         return False
 
+    # --- JS helpers for obfuscated Lichess tags (rm6/l4x/kwdb are randomized each build) ---
+    def _js_extract_moves(self):
+        """Try to extract SAN list via JavaScript, independent of obfuscated tag names.
+        Uses stable .a1t (active move) class + SAN regex scan. Returns list or None."""
+        try:
+            sans = self.chrome.execute_script("""
+                const sanRe = /^(?:[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|O-O(?:-O)?[+#]?)$/;
+                function isSan(t){
+                    if(!t) return false;
+                    t=t.trim();
+                    if(/^[0-9]+\\.?$/.test(t)) return false;
+                    if(t==='…' || t==='...') return false;
+                    if(t[0]==='P') t=t.slice(1);
+                    // strip unicode piece symbols
+                    const clean = t.replace(/[^a-zA-Z0-9xO\\-+#=]/g,'');
+                    // also try original
+                    return sanRe.test(t) || sanRe.test(clean);
+                }
+                function clean(t){ return t.replace(/[^a-zA-Z0-9xO\\-+#=]/g,'').trim(); }
+                // 1) try to find container via .a1t (stable active class)
+                let container = null;
+                const active = document.querySelector('.a1t');
+                if(active && active.parentElement) container = active.parentElement;
+                // 2) try old + new known rm/moves tags (rm6, i5d, aPp, l4x, etc.) – query all candidates
+                if(!container){
+                    const cands = document.querySelectorAll('rm6, l4x, aPp, i5d, rm6 l4x, i5d aPp');
+                    for(const c of cands){ if(c && c.children.length>0){ container=c; break; } }
+                }
+                // 3) fallback: element with most SAN children
+                if(!container){
+                    let best=null,bestCount=0;
+                    const all=document.querySelectorAll('*');
+                    for(const el of all){
+                        if(el.children.length<2) continue;
+                        let cnt=0;
+                        for(const ch of el.children){
+                            const txt=(ch.textContent||'').trim().split(/\\s+/)[0]||'';
+                            if(isSan(txt) || isSan(clean(txt))) cnt++;
+                        }
+                        if(cnt>bestCount){
+                            const r=el.getBoundingClientRect();
+                            if(r.width>80 && r.height>15){ best=el; bestCount=cnt; }
+                        }
+                    }
+                    if(bestCount>=1) container=best;
+                }
+                if(!container) return null;
+                // extract SANs from container children (filter out move numbers)
+                const res=[];
+                for(const c of container.children){
+                    let txt=(c.textContent||'').trim().split(/\\s+/)[0]||'';
+                    if(!txt) continue;
+                    if(/^[0-9]+\\.?$/.test(txt)) continue;
+                    if(txt==='…'|| txt==='...') continue;
+                    // remove move number prefix like "1."
+                    if(isSan(txt)) res.push(txt);
+                    else {
+                        const cl=clean(txt);
+                        if(isSan(cl)) res.push(cl);
+                    }
+                }
+                if(res.length===0){
+                    // deep search as last resort (nested)
+                    const all=container.querySelectorAll('*');
+                    for(const c of all){
+                        const txt=(c.textContent||'').trim();
+                        if(txt.length>=2 && txt.length<=7 && (isSan(txt)||isSan(clean(txt)))){
+                            // avoid duplicates of already collected? collect all
+                            // but only if parent is container or container descendant
+                            res.push(txt);
+                            if(res.length>200) break;
+                        }
+                    }
+                    // deduplicate while preserving order
+                    const seen=new Set(); const uniq=[];
+                    for(const s of res){ if(!seen.has(s)){ seen.add(s); uniq.push(s);} }
+                    // if uniq still looks like SAN list, return uniq filtered by SAN
+                    const filtered=uniq.filter(s=>isSan(s)||isSan(clean(s)));
+                    if(filtered.length>0) return filtered;
+                }
+                // return empty array if container exists but no moves yet (new game) vs null if no container
+                return res;
+            """)
+            if sans is None:
+                return None
+            # sans is list from JS (could be empty)
+            if not isinstance(sans, list):
+                return None
+            # Clean via python regex as well
+            cleaned = []
+            for s in sans:
+                if not isinstance(s, str):
+                    continue
+                s = s.strip()
+                if not s or s in ("…", "..."):
+                    continue
+                # strip leading move numbers if any slipped through
+                if re.match(r"^[0-9]+\.?$", s):
+                    continue
+                # re.sub to keep only SAN chars
+                cs = re.sub(r"[^a-zA-Z0-9xO#+=\\-]", "", s)
+                # fallback: if original had unicode, cs may be valid
+                # validate with SAN-ish pattern
+                if re.match(r"^(?:[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|O-O(?:-O)?[+#]?)$", s) or re.match(r"^(?:[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|O-O(?:-O)?[+#]?)$", cs):
+                    # prefer s if it already matches, else cs
+                    if re.match(r"^(?:[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|O-O(?:-O)?[+#]?)$", s):
+                        cleaned.append(s)
+                    else:
+                        cleaned.append(cs)
+                elif s:
+                    # keep as is if looks like SAN
+                    cleaned.append(s)
+            return cleaned
+        except Exception as e:
+            logger.debug("_js_extract_moves failed: %s", e)
+            return None
+
     def get_move_list(self):
+        # First: try robust JS extraction (handles obfuscated tags)
+        # This is the primary path for live games – works regardless of rm6/l4x randomization
+        for attempt in range(2):
+            try:
+                if not self.is_game_puzzles():
+                    js_moves = self._js_extract_moves()
+                    if js_moves is not None:
+                        # js_moves could be [] for new game (0 moves) – that's valid, don't treat as failure
+                        # Sync with moves_list cache for compatibility with incremental logic
+                        # If we got a valid list (empty or not), return it and keep cache in sync
+                        # For non-empty, rebuild moves_list to reflect current board
+                        self.moves_list = {str(i): san for i, san in enumerate(js_moves)}
+                        return js_moves
+            except Exception as e:
+                logger.debug("_js_extract_moves outer error: %s", e)
+            time.sleep(0.08 * (attempt + 1))
+
         for attempt in range(3):
             try:
                 is_puzzles = self.is_game_puzzles()
@@ -163,8 +300,18 @@ class LichessGrabber(Grabber):
                         if attempt < 2:
                             time.sleep(0.06 * (2 ** attempt))
                             continue
+                        # Last chance: JS already tried, but try one more direct JS before failing
+                        js_fallback = self._js_extract_moves()
+                        if js_fallback is not None:
+                            self.moves_list = {str(i): san for i, san in enumerate(js_fallback)}
+                            return js_fallback
                         return None
                     if (not move_list_elem) or (self.tag_name is None and self.set_moves_tag_name() is False):
+                        # If set_moves_tag_name failed, try JS fallback before returning empty
+                        js_fallback = self._js_extract_moves()
+                        if js_fallback is not None:
+                            self.moves_list = {str(i): san for i, san in enumerate(js_fallback)}
+                            return js_fallback
                         return []
 
                 # Get move elements
@@ -235,21 +382,76 @@ class LichessGrabber(Grabber):
         return None
 
     def get_normal_move_list_elem(self):
-        # Try primary selectors
+        # Try primary selectors (including .a1t which may return active move, not container)
         for by, val in self.MOVE_LIST_SELECTORS:
             try:
                 elem = self.chrome.find_element(by, val)
                 if elem:
+                    # If we matched .a1t (active move), return its parent (the moves container)
+                    try:
+                        if val == ".a1t" or ".a1t" in val:
+                            parent = self.chrome.execute_script("return arguments[0].parentElement", elem)
+                            if parent:
+                                return parent
+                    except Exception:
+                        pass
+                    # If element is the move itself (kwdb/move etc.), check if it has siblings that look like moves -> return parent
+                    # Heuristic: if element.tagName matches move-like and it has siblings, use parent
+                    try:
+                        tag = (elem.tag_name or "").lower()
+                        if tag in ("move", "kwdb", "z7yx") or len(tag) <= 4:
+                            pe = self.chrome.execute_script("return arguments[0].parentElement", elem)
+                            if pe and len(pe.find_elements(By.XPATH, "./*")) > 1:
+                                return pe
+                    except Exception:
+                        pass
                     return elem
             except NoSuchElementException:
                 continue
-        # Check for empty board case: rm6 exists but no l4x yet
+        # JS fallback: find container via .a1t or scan
+        try:
+            container = self.chrome.execute_script("""
+                const active = document.querySelector('.a1t');
+                if(active && active.parentElement) return active.parentElement;
+                const cands = document.querySelectorAll('rm6, l4x, aPp, i5d');
+                for(const c of cands){ if(c && c.children.length>=0) return c; }
+                // search for any element inside #main-wrap that could be moves container
+                let best=null,bestCount=0;
+                const all=document.querySelectorAll('#main-wrap *');
+                for(const el of all){
+                    if(el.children.length<1) continue;
+                    // look for children that are moves-like (short text)
+                    let cnt=0;
+                    for(const ch of el.children){
+                        const txt=(ch.textContent||'').trim();
+                        if(txt.length>=2 && txt.length<=7) cnt++;
+                    }
+                    if(cnt>bestCount && cnt>=1){
+                        const r=el.getBoundingClientRect();
+                        if(r.width>80){ best=el; bestCount=cnt; }
+                    }
+                }
+                if(best) return best;
+                return null;
+            """)
+            if container:
+                return container
+        except Exception as e:
+            logger.debug("get_normal_move_list_elem JS fallback failed: %s", e)
+
+        # Check for empty board case: rm6 / i5d exists but no moves yet -> return [] (not None)
+        for empty_sel in [(By.CSS_SELECTOR, "rm6"), (By.CSS_SELECTOR, "i5d"), (By.CSS_SELECTOR, "rm6, i5d")]:
+            try:
+                by, val = empty_sel
+                self.chrome.find_element(by, val)
+                return []
+            except NoSuchElementException:
+                continue
         try:
             self.chrome.find_element(By.XPATH, '//*[@id="main-wrap"]/main/div[1]/rm6')
             return []
         except NoSuchElementException:
             pass
-        # Try CSS rm6
         try:
             self.chrome.find_element(By.CSS_SELECTOR, "rm6")
             return []
