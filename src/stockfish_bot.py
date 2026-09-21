@@ -65,6 +65,26 @@ class StockfishBot(multiprocess.Process):
         self._prev_eval_cp = None  # white-centric cp before last move
         self.white_best_moves = []
         self.black_best_moves = []
+        # Extracted services (no behavior change, delegated)
+        try:
+            from board_sync import BoardSync as _BS
+            from engine_service import EngineService as _ES
+            from move_executor import MoveExecutor as _ME
+            from game_loop import GameLoopState as _GL
+            self._board_sync = _BS()
+            self._engine_service = _ES(stockfish_path, stockfish_depth, self.cpu_threads, self.memory, slow_mover, skill_level)
+            # keep cp losses synced
+            self._engine_service.white_cp_losses = self.white_cp_losses
+            self._engine_service.black_cp_losses = self.black_cp_losses
+            self._engine_service._prev_eval_cp = self._prev_eval_cp
+            self._move_executor_cls = _ME
+            self._move_executor = None  # created after grabber
+        except Exception as e:
+            logger.debug("Failed to init extracted services: %s", e)
+            self._board_sync = None
+            self._engine_service = None
+            self._move_executor_cls = None
+            self._move_executor = None
 
     # --- helpers ---
 
@@ -136,26 +156,25 @@ class StockfishBot(multiprocess.Process):
             pass
 
     def _reconcile_board_fen(self, board, move_list):
-        """Reconcile internal board with DOM move list via FEN. Handles takeback/undo.
-        Returns (new_board, needs_reset:bool)"""
+        """Delegate to BoardSync (extracted)."""
+        if getattr(self, "_board_sync", None) is not None:
+            try:
+                return self._board_sync.reconcile_board_fen(board, move_list)
+            except Exception as e:
+                logger.debug("BoardSync delegate failed: %s", e)
         try:
             expected = chess.Board()
             for san in move_list:
                 expected.push_san(san)
             if expected.fen() == board.fen():
                 return board, False
-            # If move count decreased -> takeback
             if len(move_list) < len(list(board.move_stack)):
                 logger.info("Takeback/abort detected: DOM moves %d < internal %d – resyncing", len(move_list), len(list(board.move_stack)))
                 return expected, True
-            # If DOM has fewer moves but not zero and fen differs -> mismatch, resync
-            # Check if DOM is prefix of board (e.g., after takeback)
             try:
-                # Try to see if move_list is prefix
                 tmp = chess.Board()
                 for san in move_list:
                     tmp.push_san(san)
-                # If no exception, use tmp as new board
                 logger.info("FEN mismatch detected – resyncing board. DOM FEN: %s | Internal FEN: %s", tmp.fen(), board.fen())
                 return tmp, True
             except Exception:
@@ -167,6 +186,11 @@ class StockfishBot(multiprocess.Process):
 
     # ── P1: Better accuracy model helpers (centipawn loss) ─────────
     def _eval_to_white_cp(self, eval_data):
+        if getattr(self, "_engine_service", None) is not None:
+            try:
+                return self._engine_service.eval_to_white_cp(eval_data)
+            except Exception:
+                pass
         """Convert stockfish eval dict to white-centric centipawns (mate => ±10000)."""
         if not eval_data or not isinstance(eval_data, dict):
             return 0
@@ -186,6 +210,11 @@ class StockfishBot(multiprocess.Process):
             return 0
 
     def _cp_loss_to_bucket(self, loss):
+        if getattr(self, "_engine_service", None) is not None:
+            try:
+                return self._engine_service.cp_loss_to_bucket(loss)
+            except Exception:
+                pass
         """Classify centipawn loss into lichess-like buckets."""
         try:
             l = int(loss)
@@ -205,6 +234,11 @@ class StockfishBot(multiprocess.Process):
             return "blunder"
 
     def _accuracy_from_losses(self, losses):
+        if getattr(self, "_engine_service", None) is not None:
+            try:
+                return self._engine_service.accuracy_from_losses(losses)
+            except Exception:
+                pass
         """Compute accuracy % from list of cp losses. Uses exponential decay similar to lichess."""
         if not losses:
             return "-"
@@ -226,6 +260,20 @@ class StockfishBot(multiprocess.Process):
             return "-"
 
     def _record_cp_loss(self, stockfish, board_before_turn_is_white):
+        if getattr(self, "_engine_service", None) is not None:
+            # keep engine_service sync with bot state
+            try:
+                self._engine_service.white_cp_losses = self.white_cp_losses
+                self._engine_service.black_cp_losses = self.black_cp_losses
+                self._engine_service._prev_eval_cp = self._prev_eval_cp
+                self._engine_service.record_cp_loss(stockfish, board_before_turn_is_white)
+                # sync back
+                self.white_cp_losses = self._engine_service.white_cp_losses
+                self.black_cp_losses = self._engine_service.black_cp_losses
+                self._prev_eval_cp = self._engine_service._prev_eval_cp
+                return
+            except Exception:
+                pass
         """Call after a move has been pushed and stockfish position updated. Compares prev cp to current."""
         try:
             cur_eval = stockfish.get_evaluation()
@@ -260,6 +308,15 @@ class StockfishBot(multiprocess.Process):
                 pass
 
     def _reset_accuracy_state(self, stockfish):
+        if getattr(self, "_engine_service", None) is not None:
+            try:
+                self._engine_service.reset_accuracy_state(stockfish)
+                self.white_cp_losses = self._engine_service.white_cp_losses
+                self.black_cp_losses = self._engine_service.black_cp_losses
+                self._prev_eval_cp = self._engine_service._prev_eval_cp
+                return
+            except Exception:
+                pass
         """Clear cp loss history and re-seed prev eval (call on new game)."""
         self.white_cp_losses = []
         self.black_cp_losses = []
@@ -270,6 +327,11 @@ class StockfishBot(multiprocess.Process):
             self._prev_eval_cp = 0
 
     def move_to_screen_pos(self, move):
+        if getattr(self, "_move_executor", None) is not None:
+            try:
+                return self._move_executor.move_to_screen_pos(move)
+            except Exception:
+                pass
         canvas_x_offset, canvas_y_offset = self.grabber.get_top_left_corner()
         board_elem = self.grabber.get_board()
         if board_elem is None:
@@ -286,11 +348,21 @@ class StockfishBot(multiprocess.Process):
         return x, y
 
     def get_move_pos(self, move):
+        if getattr(self, "_move_executor", None) is not None:
+            try:
+                return self._move_executor.get_move_pos(move)
+            except Exception:
+                pass
         start_pos_x, start_pos_y = self.move_to_screen_pos(move[0:2])
         end_pos_x, end_pos_y = self.move_to_screen_pos(move[2:4])
         return (start_pos_x, start_pos_y), (end_pos_x, end_pos_y)
 
     def make_move(self, move):
+        if getattr(self, "_move_executor", None) is not None:
+            try:
+                return self._move_executor.make_move(move)
+            except Exception:
+                pass
         start_pos, end_pos = self.get_move_pos(move)
         pyautogui.moveTo(start_pos[0], start_pos[1])
         time.sleep(self.mouse_latency)
@@ -440,6 +512,12 @@ class StockfishBot(multiprocess.Process):
                 self._safe_send(proto.MsgError(code="ERR_COLOR"))
                 logger.error("Could not determine player color")
                 return
+            # Init MoveExecutor now that is_white known (extracted)
+            try:
+                if getattr(self, "_move_executor_cls", None) is not None:
+                    self._move_executor = self._move_executor_cls(self.grabber, self.is_white, self.mouse_latency)
+            except Exception as e:
+                logger.debug("MoveExecutor init failed: %s", e)
 
             move_list = None
             for attempt in range(3):
@@ -836,6 +914,8 @@ class StockfishBot(multiprocess.Process):
             self.black_cp_losses = []
         try:
             self.is_white = self.grabber.is_white()
+            if getattr(self, "_move_executor", None) is not None:
+                self._move_executor.is_white = self.is_white
         except Exception:
             pass
         self._safe_send(proto.MsgRestart())
@@ -959,6 +1039,11 @@ class StockfishBot(multiprocess.Process):
             logger.warning("Error sending evaluation: %s", e)
 
     def calculate_material_advantage(self, board):
+        if getattr(self, "_engine_service", None) is not None:
+            try:
+                return self._engine_service.calculate_material_advantage(board)
+            except Exception:
+                pass
         piece_values = {
             chess.PAWN: 1,
             chess.KNIGHT: 3,

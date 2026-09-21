@@ -229,11 +229,16 @@ class GUI:
                               anchor="w", font=self.F_LABEL, bd=0, highlightthickness=0)
 
     def _update_platform_radios(self, *_):
-        """Sync radio bg/fg so selected platform is clearly highlighted and text stays black/white as appropriate."""
+        """Delegate to controls module (extracted)."""
+        try:
+            import controls as _ctrl
+            return _ctrl.update_platform_radios(self)
+        except Exception:
+            pass
+        # fallback inline (keeps old behavior if controls import fails)
         try:
             sel = self.website.get() if hasattr(self, "website") else "chesscom"
             is_chess = sel == "chesscom"
-            # selected => ACCENT bg with white text, unselected => light bg with black text
             self.chesscom_radio_button.configure(
                 bg=ACCENT if is_chess else BG_ELEVATED,
                 fg="#FFFFFF" if is_chess else "#000000",
@@ -415,7 +420,14 @@ class GUI:
         threading.Thread(target=self.process_checker_thread, daemon=True).start()
         threading.Thread(target=self.browser_checker_thread, daemon=True).start()
         threading.Thread(target=self.process_communicator_thread, daemon=True).start()
-        threading.Thread(target=self.keypress_listener_thread, daemon=True).start()
+        # Hotkeys extracted to hotkeys.py – prefer HotkeyManager
+        try:
+            from hotkeys import HotkeyManager
+            self._hotkey_manager = HotkeyManager(self)
+            self._hotkey_manager.start()
+        except Exception as e:
+            logger.debug("HotkeyManager start failed, falling back to inline thread: %s", e)
+            threading.Thread(target=self.keypress_listener_thread, daemon=True).start()
 
     def _set_status(self, text, color, bg):
         try:
