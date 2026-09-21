@@ -81,6 +81,12 @@ class GUI:
         self._save_after_id = None
         self._export_counter = 0
         self._last_export_dir = None
+        # Browser session manager (extracted from inline Chrome logic)
+        try:
+            from browser_session import BrowserSessionManager
+            self._browser_manager = BrowserSessionManager()
+        except Exception:
+            self._browser_manager = None
 
         master.title("CHESS-X · Stockfish Bot")
         master.geometry("1120x760")
@@ -543,8 +549,17 @@ class GUI:
                 self._overlay_queue = None
         except Exception:
             pass
+        # Browser via manager (with fallback to direct quit for legacy)
         try:
-            if self.chrome is not None:
+            if getattr(self, "_browser_manager", None) is not None:
+                self._browser_manager.close()
+                # keep GUI attributes in sync
+                self.chrome = None
+                self.chrome_url = None
+                self.chrome_session_id = None
+                self.opened_browser = False
+                self.opening_browser = False
+            elif self.chrome is not None:
                 try:
                     self.chrome.quit()
                 except Exception as e:
@@ -645,9 +660,18 @@ class GUI:
                 self._overlay_queue = None
         except Exception:
             pass
-        # quit chrome hard
+        # quit chrome hard via manager if available
         try:
-            if getattr(self, "chrome", None) is not None:
+            bm = getattr(self, "_browser_manager", None)
+            if bm is not None:
+                try:
+                    bm.close()
+                except Exception:
+                    pass
+                self.chrome = None
+                self.chrome_url = None
+                self.chrome_session_id = None
+            elif getattr(self, "chrome", None) is not None:
                 try:
                     self.chrome.quit()
                 except Exception:
@@ -709,7 +733,39 @@ class GUI:
     def browser_checker_thread(self):
         while not self.exit:
             try:
-                if self.opened_browser and self.chrome is not None:
+                bm = getattr(self, "_browser_manager", None)
+                if bm is not None and self.opened_browser:
+                    # Delegate to manager if available
+                    try:
+                        if bm.check_driver_log_for_close():
+                            self.opened_browser = False
+                            try:
+                                self.master.after(0, self._on_browser_closed_ui)
+                            except Exception as e:
+                                logger.debug("after _on_browser_closed_ui failed: %s", e)
+                            try:
+                                self.master.after(0, self.on_stop_button_listener)
+                            except tk.TclError:
+                                self.on_stop_button_listener()
+                            self.chrome = bm.chrome
+                            continue
+                        if not bm.is_alive():
+                            self.opened_browser = False
+                            try:
+                                self.master.after(0, self._on_browser_closed_ui)
+                            except Exception as ae:
+                                logger.debug("after _on_browser_closed_ui fallback failed: %s", ae)
+                            self.chrome = bm.chrome
+                            continue
+                    except Exception as e:
+                        logger.debug("browser_manager check failed: %s", e)
+                    # sync legacy attrs
+                    self.chrome = bm.chrome
+                    self.chrome_url = bm.chrome_url
+                    self.chrome_session_id = bm.chrome_session_id
+                    self.opened_browser = bm.opened_browser
+                    self.opening_browser = bm.opening_browser
+                elif self.opened_browser and self.chrome is not None:
                     try:
                         logs = self.chrome.get_log("driver")
                         if logs and "target window already closed" in logs[-1].get("message", ""):
@@ -724,7 +780,6 @@ class GUI:
                                 self.on_stop_button_listener()
                             self.chrome = None
                     except (WebDriverException, AttributeError) as e:
-                        # get_log not supported or driver gone – fallback below
                         logger.debug("get_log check failed, falling through to current_url check: %s", e)
                         try:
                             _ = self.chrome.current_url
@@ -740,7 +795,6 @@ class GUI:
                             logger.debug("current_url unexpected error: %s", ue)
                     except Exception as e:
                         logger.debug("browser_checker get_log unexpected: %s", e)
-                        # Fallback: check if window handles empty
                         try:
                             _ = self.chrome.current_url
                         except WebDriverException as ce:
@@ -970,7 +1024,7 @@ class GUI:
         threading.Thread(target=self._open_browser_worker, daemon=True).start()
 
     def _open_browser_worker(self):
-        """Background worker for Chrome startup – never touches Tk directly."""
+        """Background worker for Chrome startup – delegates to BrowserSessionManager."""
         def _ui(fn):
             try:
                 self.master.after(0, fn)
@@ -983,6 +1037,12 @@ class GUI:
 
         def _fail_reset(msg_title, msg_body):
             self.opening_browser = False
+            bm = getattr(self, "_browser_manager", None)
+            if bm is not None:
+                try:
+                    bm.opening_browser = False
+                except Exception:
+                    pass
             def _reset():
                 try:
                     self.open_browser_button.configure(text="↗   OPEN BROWSER", state="normal", bg="#3F7180")
@@ -991,6 +1051,33 @@ class GUI:
                 messagebox.showerror(msg_title, msg_body)
             _ui(_reset)
 
+        # Prefer BrowserSessionManager if available (extracted logic)
+        bm = getattr(self, "_browser_manager", None)
+        if bm is not None:
+            website = self.website.get() if hasattr(self, "website") else "chesscom"
+            ok = bm.open(website)
+            if not ok:
+                _fail_reset("ChromeDriver error",
+                    "Failed to start Chrome. Check logs/chess-x.log for details. Ensure Chrome is installed and no other ChromeDriver is stuck. Try deleting %USERPROFILE%\\.wdm and retry.")
+                return
+            # sync GUI attrs from manager (keeps old code paths working)
+            self.chrome = bm.chrome
+            self.chrome_url = bm.chrome_url
+            self.chrome_session_id = bm.chrome_session_id
+            self.opening_browser = bm.opening_browser
+            self.opened_browser = bm.opened_browser
+            def _success():
+                try:
+                    self.open_browser_button.configure(text="✓  BROWSER OPEN", state="disabled", bg="#E2F0E7", fg="#2E7D5B")
+                    self.start_button.configure(state="normal")
+                    try: self._validate_inputs()
+                    except Exception: pass
+                except tk.TclError as e:
+                    logger.debug("success UI update failed: %s", e)
+            _ui(_success)
+            logger.info("Browser opened via manager: %s", self.chrome_url)
+            return
+        # Fallback: legacy inline Chrome creation (kept for robustness if manager missing)
         options = webdriver.ChromeOptions()
         options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
         options.add_argument('--disable-blink-features=AutomationControlled')
@@ -1086,7 +1173,6 @@ class GUI:
                 try:
                     self.open_browser_button.configure(text="✓  BROWSER OPEN", state="disabled", bg="#E2F0E7", fg="#2E7D5B")
                     self.start_button.configure(state="normal")
-                    # P1: re-validate inputs now that browser is ready
                     try: self._validate_inputs()
                     except Exception: pass
                 except tk.TclError as e:
