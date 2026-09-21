@@ -18,6 +18,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from stockfish_bot import StockfishBot
 from utilities import check_linux_input_permissions, get_keyboard_handler, get_logger, is_wayland
+import protocol as proto
 
 logger = get_logger("gui")
 _kb, _kb_backend = get_keyboard_handler()
@@ -774,7 +775,64 @@ class GUI:
 
     def _handle_pipe_message(self, data):
         try:
+            # Typed path first
+            if proto.is_typed_pipe_msg(data):
+                if isinstance(data, proto.MsgStart):
+                    self.clear_tree()
+                    self.match_moves = []
+                    self._set_status("RUNNING", SUCCESS, SUCCESS_BG)
+                    try:
+                        self.start_button["text"] = "■   STOP"
+                        self.start_button["state"] = "normal"
+                        self.start_button.configure(bg="#B54747", activebackground="#943737", disabledforeground="#A58F86")
+                        self.start_button["command"] = self.on_stop_button_listener
+                        self.start_button.update()
+                    except Exception:
+                        pass
+                    logger.info("Bot START received (typed)")
+                    return
+                elif isinstance(data, proto.MsgRestart):
+                    self.restart_after_stopping = True
+                    try:
+                        self.stockfish_bot_pipe.send(proto.MsgDelete())
+                    except Exception:
+                        pass
+                    return
+                elif isinstance(data, proto.MsgSingleMove):
+                    self.match_moves.append(data.san)
+                    self.insert_move(data.san)
+                    self.tree.yview_moveto(1)
+                    try: self._move_count.configure(text=f"{len(self.match_moves)} moves")
+                    except: pass
+                    return
+                elif isinstance(data, proto.MsgMultiMove):
+                    self.match_moves += data.sans
+                    self.set_moves(data.sans)
+                    self.tree.yview_moveto(1)
+                    try: self._move_count.configure(text=f"{len(self.match_moves)} moves")
+                    except: pass
+                    return
+                elif isinstance(data, proto.MsgEval):
+                    self.update_evaluation_display(data.eval_str, data.wdl_str, data.material_str, data.bot_acc, data.opponent_acc)
+                    return
+                elif isinstance(data, proto.MsgError):
+                    code = data.code
+                    detail = data.detail
+                    # dispatch to legacy handlers below via code
+                    data = code + (f"|{detail}" if detail else "")
+                    # fall through to string handling by reassigning and continuing
+                else:
+                    logger.debug("Unknown typed pipe message: %s", data)
+                    return
+            # Legacy string path: if object was typed error we already converted, else if not str try to parse
             if not isinstance(data, str):
+                # try to interpret via protocol
+                try:
+                    parsed = proto.legacy_to_bot_msg(data) if isinstance(data, str) else data
+                    if parsed is not data:
+                        return self._handle_pipe_message(parsed)
+                except Exception:
+                    pass
                 logger.debug("Unknown pipe message type: %s", data)
                 return
             if data == "START":
@@ -793,7 +851,7 @@ class GUI:
             elif data.startswith("RESTART"):
                 self.restart_after_stopping = True
                 try:
-                    self.stockfish_bot_pipe.send("DELETE")
+                    self.stockfish_bot_pipe.send(proto.MsgDelete())
                 except Exception:
                     pass
             elif data.startswith("S_MOVE"):

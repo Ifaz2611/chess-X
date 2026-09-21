@@ -64,11 +64,30 @@ class OverlayScreen(QWidget):
 
         while True:
             message = self.stockfish_queue.get()
+            # Typed overlay messages first (no behavior change, just new types)
+            try:
+                import protocol as proto  # lazy to avoid circular import at top
+                if isinstance(message, proto.OverlayArrows):
+                    self.set_arrows(message.arrows)
+                    continue
+                if isinstance(message, proto.OverlayClear):
+                    self.set_arrows([])
+                    continue
+                if isinstance(message, proto.OverlayEval):
+                    if message.board_position is not None:
+                        self.board_position = message.board_position
+                        self.update_eval_bar_position()
+                    if message.is_white is not None:
+                        self.is_white = message.is_white
+                    self.update_eval_bar(message.eval_value, message.eval_type)
+                    continue
+            except Exception:
+                pass
             if isinstance(message, list):
-                # Arrow data
+                # Arrow data (legacy)
                 self.set_arrows(message)
             elif isinstance(message, dict) and "eval" in message:
-                # Evaluation data
+                # Evaluation data (legacy)
                 eval_value = message["eval"]
                 eval_type = message.get("eval_type", "cp")
                 

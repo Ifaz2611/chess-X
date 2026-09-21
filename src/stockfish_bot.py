@@ -16,6 +16,7 @@ from selenium.common.exceptions import StaleElementReferenceException, WebDriver
 from grabbers.chesscom_grabber import ChesscomGrabber
 from grabbers.lichess_grabber import LichessGrabber
 from utilities import char_to_num, get_logger, get_keyboard_handler
+import protocol as proto
 
 logger = get_logger("stockfish_bot")
 
@@ -68,11 +69,17 @@ class StockfishBot(multiprocess.Process):
     # --- helpers ---
 
     def _safe_send(self, msg):
+        """Send typed or legacy string message via pipe (pickle)."""
         try:
             if self.pipe and not self.pipe.closed:
                 self.pipe.send(msg)
         except (BrokenPipeError, OSError, EOFError) as e:
-            logger.debug("pipe send failed (%s): %s", msg[:20] if isinstance(msg, str) else msg, e)
+            preview = msg[:20] if isinstance(msg, str) else type(msg).__name__
+            logger.debug("pipe send failed (%s): %s", preview, e)
+
+    def _send_typed(self, typed_msg):
+        """Convenience: send typed dataclass."""
+        self._safe_send(typed_msg)
 
     def _clear_overlay_queue(self):
         try:
@@ -335,8 +342,15 @@ class StockfishBot(multiprocess.Process):
             try:
                 if self.pipe.poll(0.1):
                     msg = self.pipe.recv()
-                    if msg == "DELETE":
+                    # typed or legacy
+                    if msg == "DELETE" or isinstance(msg, proto.MsgDelete) or (hasattr(msg, "kind") and getattr(msg, "kind") == "DELETE"):
                         return
+                    # also handle legacy helper if str
+                    try:
+                        if isinstance(msg, str) and msg == "DELETE":
+                            return
+                    except Exception:
+                        pass
                 else:
                     # timeout check – if GUI closed pipe, exit
                     if time.time() - start > 30:
@@ -353,7 +367,7 @@ class StockfishBot(multiprocess.Process):
             self.grabber.click_puzzle_next()
         except Exception as e:
             logger.warning("go_to_next_puzzle failed: %s", e)
-        self._safe_send("RESTART")
+        self._safe_send(proto.MsgRestart())
         self.wait_for_gui_to_delete()
 
     def find_new_online_match(self):
@@ -362,7 +376,7 @@ class StockfishBot(multiprocess.Process):
             self.grabber.click_game_next()
         except Exception as e:
             logger.warning("find_new_online_match failed: %s", e)
-        self._safe_send("RESTART")
+        self._safe_send(proto.MsgRestart())
         self.wait_for_gui_to_delete()
 
     def run(self):
@@ -392,15 +406,15 @@ class StockfishBot(multiprocess.Process):
             stockfish = Stockfish(path=self.stockfish_path, depth=self.stockfish_depth, parameters=parameters)
             self._stockfish = stockfish
         except PermissionError:
-            self._safe_send("ERR_PERM")
+            self._safe_send(proto.MsgError(code="ERR_PERM"))
             logger.error("Stockfish PermissionError: %s", self.stockfish_path)
             return
         except OSError as e:
-            self._safe_send("ERR_EXE")
+            self._safe_send(proto.MsgError(code="ERR_EXE"))
             logger.error("Stockfish OSError: %s %s", self.stockfish_path, e)
             return
         except Exception as e:
-            self._safe_send("ERR_EXE")
+            self._safe_send(proto.MsgError(code="ERR_EXE"))
             logger.error("Stockfish init failed: %s", e)
             return
 
@@ -412,7 +426,7 @@ class StockfishBot(multiprocess.Process):
                     break
                 time.sleep(0.5 * (attempt+1))
             if self.grabber.get_board() is None:
-                self._safe_send("ERR_BOARD")
+                self._safe_send(proto.MsgError(code="ERR_BOARD"))
                 logger.error("Board not found after retries")
                 return
 
@@ -423,7 +437,7 @@ class StockfishBot(multiprocess.Process):
                     break
                 time.sleep(0.4)
             if self.is_white is None:
-                self._safe_send("ERR_COLOR")
+                self._safe_send(proto.MsgError(code="ERR_COLOR"))
                 logger.error("Could not determine player color")
                 return
 
@@ -434,13 +448,13 @@ class StockfishBot(multiprocess.Process):
                     break
                 time.sleep(0.4)
             if move_list is None:
-                self._safe_send("ERR_MOVES")
+                self._safe_send(proto.MsgError(code="ERR_MOVES"))
                 logger.error("Move list not found")
                 return
 
             score_pattern = r"([0-9]+)\-([0-9]+)"
             if len(move_list) > 0 and re.match(score_pattern, move_list[-1]):
-                self._safe_send("ERR_GAMEOVER")
+                self._safe_send(proto.MsgError(code="ERR_GAMEOVER"))
                 return
 
             board = chess.Board()
@@ -461,9 +475,9 @@ class StockfishBot(multiprocess.Process):
             black_best_moves = []
 
             self.send_eval_data(stockfish, board)
-            self._safe_send("START")
+            self._safe_send(proto.MsgStart())
             if len(move_list) > 0:
-                self._safe_send("M_MOVE" + ",".join(move_list))
+                self._safe_send(proto.MsgMultiMove(sans=move_list))
 
             while True:
                 if self._shutdown:
@@ -487,7 +501,7 @@ class StockfishBot(multiprocess.Process):
                             move = stockfish.get_best_move()
                         except Exception as e:
                             logger.error("get_best_move failed: %s", e)
-                            self._safe_send("ERR_TIMEOUT")
+                            self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
                             time.sleep(0.5)
                             continue
 
@@ -505,9 +519,7 @@ class StockfishBot(multiprocess.Process):
                     if self.enable_manual_mode:
                         try:
                             move_start_pos, move_end_pos = self.get_move_pos(move)
-                            self.overlay_queue.put([
-                                ((int(move_start_pos[0]), int(move_start_pos[1])), (int(move_end_pos[0]), int(move_end_pos[1]))),
-                            ])
+                            self.overlay_queue.put(proto.OverlayArrows(arrows=[((int(move_start_pos[0]), int(move_start_pos[1])), (int(move_end_pos[0]), int(move_end_pos[1])))]))
                         except Exception as e:
                             logger.debug("overlay put failed: %s", e)
                         # Poll for manual trigger or opponent move with stale resilience
@@ -570,7 +582,7 @@ class StockfishBot(multiprocess.Process):
                             board.push_uci(move)
                         except Exception as e:
                             logger.error("push_uci failed for %s: %s", move, e)
-                            self._safe_send("ERR_TIMEOUT")
+                            self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
                             continue
                         try:
                             stockfish.make_moves_from_current_position([move])
@@ -585,17 +597,17 @@ class StockfishBot(multiprocess.Process):
                                 self.grabber.make_mouseless_move(move, move_count + 1)
                             except Exception as e:
                                 logger.warning("mouseless move failed: %s", e)
-                                self._safe_send("ERR_DISCONNECT")
+                                self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
                         else:
                             try:
                                 self.make_move(move)
                             except Exception as e:
                                 logger.error("make_move failed: %s", e)
-                                self._safe_send("ERR_DISCONNECT")
+                                self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
 
                     self._clear_overlay_queue_safe()
                     self.send_eval_data(stockfish, board, white_moves, white_best_moves, black_moves, black_best_moves)
-                    self._safe_send("S_MOVE" + move_san)
+                    self._safe_send(proto.MsgSingleMove(san=move_san))
 
                     if board.is_checkmate():
                         if self.enable_non_stop_puzzles and self.grabber.is_game_puzzles():
@@ -629,7 +641,7 @@ class StockfishBot(multiprocess.Process):
                         consecutive_errors += 1
                         logger.debug("get_move_list error in opponent wait: %s", e)
                         if consecutive_errors > 5:
-                            self._safe_send("ERR_DISCONNECT")
+                            self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
                             time.sleep(0.5)
                             consecutive_errors = 0
                         time.sleep(0.3)
@@ -639,7 +651,7 @@ class StockfishBot(multiprocess.Process):
                         consecutive_errors += 1
                         if consecutive_errors > 3:
                             logger.warning("get_move_list returned None repeatedly – disconnect?")
-                            self._safe_send("ERR_DISCONNECT")
+                            self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
                             time.sleep(0.5)
                         time.sleep(0.3)
                         continue
@@ -690,12 +702,12 @@ class StockfishBot(multiprocess.Process):
                             pass
                         move_list = new_move_list
                         self._clear_overlay_queue_safe()
-                        self._safe_send("RESTART")
+                        self._safe_send(proto.MsgRestart())
                         self.wait_for_gui_to_delete()
                         self.send_eval_data(stockfish, board)
-                        self._safe_send("START")
+                        self._safe_send(proto.MsgStart())
                         if len(move_list) > 0:
-                            self._safe_send("M_MOVE" + ",".join(move_list))
+                            self._safe_send(proto.MsgMultiMove(sans=move_list))
                         break
 
                     # Case 3: FEN mismatch when same move count but different moves (e.g., undo+ different line)
@@ -708,11 +720,11 @@ class StockfishBot(multiprocess.Process):
                             board = new_board
                             stockfish.set_position([m.uci() for m in board.move_stack])
                             move_list = new_move_list
-                            self._safe_send("RESTART")
+                            self._safe_send(proto.MsgRestart())
                             self.wait_for_gui_to_delete()
                             self.send_eval_data(stockfish, board)
-                            self._safe_send("START")
-                            self._safe_send("M_MOVE" + ",".join(move_list))
+                            self._safe_send(proto.MsgStart())
+                            self._safe_send(proto.MsgMultiMove(sans=move_list))
                             break
                         except Exception as e:
                             logger.debug("FEN mismatch handling error: %s", e)
@@ -763,7 +775,7 @@ class StockfishBot(multiprocess.Process):
                     # P1: record cp loss for opponent move
                     self._record_cp_loss(stockfish, mover_is_white)
                     self.send_eval_data(stockfish, board, white_moves, white_best_moves, black_moves, black_best_moves)
-                    self._safe_send("S_MOVE" + move)
+                    self._safe_send(proto.MsgSingleMove(san=move))
                 except Exception as e:
                     logger.warning("Failed to apply opponent move %s: %s", move_list[-1] if move_list else "?", e)
                     # Try FEN resync
@@ -787,14 +799,14 @@ class StockfishBot(multiprocess.Process):
             logger.error("Unhandled exception in StockfishBot.run: %s\n%s", e, tb)
             # Map exception types to new error codes
             if isinstance(e, TimeoutException):
-                self._safe_send("ERR_TIMEOUT")
+                self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
             elif isinstance(e, WebDriverException):
-                self._safe_send("ERR_DISCONNECT")
+                self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
             elif isinstance(e, StaleElementReferenceException):
-                self._safe_send("ERR_STALE")
+                self._safe_send(proto.MsgError(code="ERR_STALE"))
             else:
                 # Generic engine error – include info via ERR_ENGINE
-                self._safe_send("ERR_ENGINE|" + str(e)[:200])
+                self._safe_send(proto.MsgError(code="ERR_ENGINE", detail=str(e)[:200]))
             # Also try to log to file and print for backwards compat
             exc_type, exc_obj, exc_tb = sys.exc_info()
             if exc_tb:
@@ -826,14 +838,14 @@ class StockfishBot(multiprocess.Process):
             self.is_white = self.grabber.is_white()
         except Exception:
             pass
-        self._safe_send("RESTART")
+        self._safe_send(proto.MsgRestart())
         self.wait_for_gui_to_delete()
         self.send_eval_data(stockfish, board)
-        self._safe_send("START")
+        self._safe_send(proto.MsgStart())
 
     def _clear_overlay_queue_safe(self):
         try:
-            self.overlay_queue.put([])
+            self.overlay_queue.put(proto.OverlayClear())
         except Exception:
             pass
         # Also drain if needed
@@ -921,8 +933,7 @@ class StockfishBot(multiprocess.Process):
                 wdl_str = "?/?/?"
             bot_accuracy = white_accuracy if self.is_white else black_accuracy
             opponent_accuracy = black_accuracy if self.is_white else white_accuracy
-            data = f"EVAL|{eval_str}|{wdl_str}|{material}|{bot_accuracy}|{opponent_accuracy}"
-            self._safe_send(data)
+            self._safe_send(proto.MsgEval(eval_str=eval_str, wdl_str=wdl_str, material_str=material, bot_acc=bot_accuracy, opponent_acc=opponent_accuracy))
             overlay_data = {
                 "eval": eval_value_decimal,
                 "eval_type": eval_type
@@ -941,7 +952,7 @@ class StockfishBot(multiprocess.Process):
                     logger.debug("overlay board_position error: %s", e)
             overlay_data["is_white"] = self.is_white
             try:
-                self.overlay_queue.put(overlay_data)
+                self.overlay_queue.put(proto.OverlayEval(eval_value=eval_value_decimal, eval_type=eval_type, board_position=overlay_data.get("board_position"), is_white=overlay_data.get("is_white")))
             except Exception as e:
                 logger.debug("overlay queue put error: %s", e)
         except Exception as e:
