@@ -543,11 +543,15 @@ Manual checklist before a release:
 
 ## Contributing
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor workflow, coding expectations, and PR checklist.
+
 1. Fork → branch: `git checkout -b feat/human-delays`
 2. Match the existing style (`ruff` + `black`)
 3. Test on both sites if you touch a grabber
-4. Update `README.md` / `TODO.md` for user‑facing changes
+4. Update `README.md` / `TODO.md` for user-facing changes
 5. Open a PR — include screenshots or GIFs for UI work
+
+Please also review the [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md).
 
 ---
 
