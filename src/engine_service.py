@@ -32,7 +32,7 @@ class EngineService:
         params = {
             "Threads": self.threads,
             "Hash": self.memory,
-            "Ponder": "true",
+            "Ponder": "false",
             "Slow Mover": self.slow_mover,
             "Skill Level": self.skill_level,
         }

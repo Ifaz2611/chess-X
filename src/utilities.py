@@ -151,7 +151,7 @@ def get_keyboard_handler():
 # Retry with exponential backoff for stale / detached DOM
 # ---------------------------------------------------------------------------
 
-def retry_on_stale(max_retries=3, base_delay=0.15, exceptions=(StaleElementReferenceException,)):
+def retry_on_stale(max_retries=3, base_delay=0.06, exceptions=(StaleElementReferenceException,)):
     """Decorator: retry function on stale/detached DOM with exponential backoff."""
     def decorator(func):
         @functools.wraps(func)
@@ -182,7 +182,7 @@ def retry_on_stale(max_retries=3, base_delay=0.15, exceptions=(StaleElementRefer
     return decorator
 
 
-def with_retry(max_retries=3, base_delay=0.15):
+def with_retry(max_retries=3, base_delay=0.06):
     """Inline retry helper for ad-hoc blocks."""
     def _retry(fn, *a, **kw):
         delay = base_delay
@@ -205,7 +205,7 @@ def with_retry(max_retries=3, base_delay=0.15):
 # WebDriver helpers – resilient waiting / fallback chain
 # ---------------------------------------------------------------------------
 
-def wait_for_any_element(driver, selectors, timeout=8):
+def wait_for_any_element(driver, selectors, timeout=3):
     """Try each (By, value) selector in order until one is found via WebDriverWait. Returns WebElement or None."""
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -225,7 +225,7 @@ def wait_for_any_element(driver, selectors, timeout=8):
     return None
 
 
-def find_element_with_fallback(driver, selectors, timeout=6):
+def find_element_with_fallback(driver, selectors, timeout=2):
     """Try selectors sequentially (CSS/XPATH) without explicit wait – fast fallback chain."""
     for by, value in selectors:
         try:

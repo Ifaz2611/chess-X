@@ -39,18 +39,18 @@ class LichessGrabber(Grabber):
         self.tag_name = None
 
     def update_board_elem(self):
-        for attempt in range(4):
+        for attempt in range(3):
             try:
-                elem = self._find_with_retry(self.BOARD_SELECTORS, timeout=6)
+                elem = self._find_with_retry(self.BOARD_SELECTORS, timeout=2)
                 if elem is not None:
                     self._board_elem = elem
                     logger.debug("Lichess board found: %s", elem.tag_name)
                     return
                 # If not found, wait a bit and retry (board may be loading)
-                time.sleep(0.5 * (attempt + 1))
+                time.sleep(0.15 * (attempt + 1))
             except (StaleElementReferenceException, WebDriverException) as e:
                 logger.debug("update_board_elem stale attempt %d: %s", attempt, e)
-                time.sleep(0.3 * (2 ** attempt))
+                time.sleep(0.08 * (2 ** attempt))
         self._board_elem = None
         logger.warning("update_board_elem: no lichess board found after retries")
 
@@ -88,11 +88,11 @@ class LichessGrabber(Grabber):
                 else:
                     return "black" not in cls
             except StaleElementReferenceException:
-                time.sleep(0.2 * (2 ** attempt))
+                time.sleep(0.06 * (2 ** attempt))
                 continue
             except Exception as e:
                 logger.debug("is_white error attempt %d: %s", attempt, e)
-                time.sleep(0.2)
+                time.sleep(0.06)
                 continue
         return None
 
@@ -122,7 +122,7 @@ class LichessGrabber(Grabber):
                     pass
                 return False
             except StaleElementReferenceException:
-                time.sleep(0.15)
+                time.sleep(0.05)
                 continue
             except WebDriverException as e:
                 logger.debug("is_game_over error: %s", e)
@@ -154,14 +154,14 @@ class LichessGrabber(Grabber):
                     move_list_elem = self.get_puzzles_move_list_elem()
                     if move_list_elem is None:
                         if attempt < 2:
-                            time.sleep(0.2 * (2 ** attempt))
+                            time.sleep(0.06 * (2 ** attempt))
                             continue
                         return None
                 else:
                     move_list_elem = self.get_normal_move_list_elem()
                     if move_list_elem is None:
                         if attempt < 2:
-                            time.sleep(0.2 * (2 ** attempt))
+                            time.sleep(0.06 * (2 ** attempt))
                             continue
                         return None
                     if (not move_list_elem) or (self.tag_name is None and self.set_moves_tag_name() is False):
@@ -180,7 +180,7 @@ class LichessGrabber(Grabber):
                         else:
                             children = move_list_elem.find_elements(By.CSS_SELECTOR, "move:not([data-processed])")
                 except StaleElementReferenceException:
-                    time.sleep(0.2)
+                    time.sleep(0.05)
                     # retry once
                     if not is_puzzles:
                         if not self.moves_list:
@@ -214,11 +214,11 @@ class LichessGrabber(Grabber):
 
             except StaleElementReferenceException as e:
                 logger.debug("get_move_list stale attempt %d: %s", attempt, e)
-                time.sleep(0.2 * (2 ** attempt))
+                time.sleep(0.06 * (2 ** attempt))
                 continue
             except WebDriverException as e:
                 logger.debug("get_move_list WebDriverException attempt %d: %s", attempt, e)
-                time.sleep(0.2)
+                time.sleep(0.06)
                 if attempt == 2:
                     return None
                 continue
@@ -264,7 +264,7 @@ class LichessGrabber(Grabber):
             except NoSuchElementException:
                 pass
             except StaleElementReferenceException:
-                time.sleep(0.1)
+                time.sleep(0.04)
                 continue
             # Fallback: check URL
             try:

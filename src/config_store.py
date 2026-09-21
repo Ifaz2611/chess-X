@@ -47,9 +47,9 @@ DEFAULTS: dict[str, Any] = {
     "enable_non_stop_matches": 0,
     "enable_bongcloud": 0,
     "mouse_latency": 0.0,
-    "slow_mover": 100,
+    "slow_mover": 60,
     "skill_level": 20,
-    "stockfish_depth": 15,
+    "stockfish_depth": 13,
     "enable_topmost": 1,
 }
 
@@ -68,9 +68,9 @@ class Config:
     enable_non_stop_matches: int = 0
     enable_bongcloud: int = 0
     mouse_latency: float = 0.0
-    slow_mover: int = 100
+    slow_mover: int = 60
     skill_level: int = 20
-    stockfish_depth: int = 15
+    stockfish_depth: int = 13
     enable_topmost: int = 1
 
     @classmethod

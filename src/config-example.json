@@ -8,8 +8,8 @@
   "enable_non_stop_matches": 0,
   "enable_bongcloud": 0,
   "mouse_latency": 0.0,
-  "slow_mover": 100,
+  "slow_mover": 60,
   "skill_level": 20,
-  "stockfish_depth": 15,
+  "stockfish_depth": 13,
   "enable_topmost": 1
 }

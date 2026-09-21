@@ -369,7 +369,7 @@ class StockfishBot(multiprocess.Process):
         pyautogui.dragTo(end_pos[0], end_pos[1])
         # Promotion: handle all 4 piece types for both colors correctly
         if len(move) == 5:
-            time.sleep(0.15)
+            time.sleep(0.04)
             promo = move[4].lower()
             # Chess.com / lichess promotion UI: pieces appear offset from target square.
             # Direction depends on promotion rank: white promotes on rank 8 (pieces go downward),
@@ -470,7 +470,7 @@ class StockfishBot(multiprocess.Process):
         parameters = {
             "Threads": self.cpu_threads,
             "Hash": self.memory,
-            "Ponder": "true",
+            "Ponder": "false",
             "Slow Mover": self.slow_mover,
             "Skill Level": self.skill_level
         }
@@ -491,12 +491,12 @@ class StockfishBot(multiprocess.Process):
             return
 
         try:
-            # Board with retry
+            # Board with retry (fast)
             for attempt in range(3):
                 self.grabber.update_board_elem()
                 if self.grabber.get_board() is not None:
                     break
-                time.sleep(0.5 * (attempt+1))
+                time.sleep(0.2 * (attempt+1))
             if self.grabber.get_board() is None:
                 self._safe_send(proto.MsgError(code="ERR_BOARD"))
                 logger.error("Board not found after retries")
@@ -507,7 +507,7 @@ class StockfishBot(multiprocess.Process):
                 self.is_white = self.grabber.is_white()
                 if self.is_white is not None:
                     break
-                time.sleep(0.4)
+                time.sleep(0.15)
             if self.is_white is None:
                 self._safe_send(proto.MsgError(code="ERR_COLOR"))
                 logger.error("Could not determine player color")
@@ -524,7 +524,7 @@ class StockfishBot(multiprocess.Process):
                 move_list = self.grabber.get_move_list()
                 if move_list is not None:
                     break
-                time.sleep(0.4)
+                time.sleep(0.15)
             if move_list is None:
                 self._safe_send(proto.MsgError(code="ERR_MOVES"))
                 logger.error("Move list not found")
@@ -573,19 +573,37 @@ class StockfishBot(multiprocess.Process):
                         elif move_count == 3:
                             move = "e8e7"
                         if move and not board.is_legal(chess.Move.from_uci(move)):
-                            move = stockfish.get_best_move()
+                            # FAST: time-limited instead of depth-blocking
+                            try:
+                                move = stockfish.get_best_move_time(150)
+                            except Exception:
+                                move = stockfish.get_best_move()
                     else:
                         try:
-                            move = stockfish.get_best_move()
+                            # FAST: time-limited search keeps bullet/blitz responsive
+                            # Depth 20 blocking can take >1s; movetime 150-300ms is much faster
+                            # Scale by slow_mover so high slow_mover still gets a bit more time
+                            if self.slow_mover < 60:
+                                _mt = 100
+                            elif self.slow_mover < 100:
+                                _mt = 150
+                            elif self.stockfish_depth >= 18:
+                                _mt = 300
+                            else:
+                                _mt = 200
+                            try:
+                                move = stockfish.get_best_move_time(_mt)
+                            except Exception:
+                                move = stockfish.get_best_move()
                         except Exception as e:
                             logger.error("get_best_move failed: %s", e)
                             self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
-                            time.sleep(0.5)
+                            time.sleep(0.2)
                             continue
 
                     if not move:
                         logger.warning("get_best_move returned None/empty")
-                        time.sleep(0.3)
+                        time.sleep(0.1)
                         continue
 
                     if board.turn == chess.WHITE:
@@ -634,7 +652,7 @@ class StockfishBot(multiprocess.Process):
                                     board, _ = self._reconcile_board_fen(board, move_list)
                                     stockfish.set_position([m.uci() for m in board.move_stack])
                                 break
-                            time.sleep(0.05)
+                            time.sleep(0.02)
                             # Avoid indefinite spin – timeout handled by normal loop
                             if time.time() - poll_start > 300:
                                 break
@@ -693,7 +711,7 @@ class StockfishBot(multiprocess.Process):
                         elif self.enable_non_stop_matches and not self.enable_non_stop_puzzles:
                             self.find_new_online_match()
                         return
-                    time.sleep(0.1)
+                    time.sleep(0.02)
 
                 # Wait for opponent
                 previous_move_list = move_list.copy()
@@ -710,7 +728,7 @@ class StockfishBot(multiprocess.Process):
                             return
                     except (StaleElementReferenceException, WebDriverException) as e:
                         logger.debug("is_game_over stale: %s", e)
-                        time.sleep(0.2)
+                        time.sleep(0.08)
                         continue
 
                     try:
@@ -720,9 +738,9 @@ class StockfishBot(multiprocess.Process):
                         logger.debug("get_move_list error in opponent wait: %s", e)
                         if consecutive_errors > 5:
                             self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
-                            time.sleep(0.5)
+                            time.sleep(0.2)
                             consecutive_errors = 0
-                        time.sleep(0.3)
+                        time.sleep(0.12)
                         continue
 
                     if new_move_list is None:
@@ -730,8 +748,8 @@ class StockfishBot(multiprocess.Process):
                         if consecutive_errors > 3:
                             logger.warning("get_move_list returned None repeatedly – disconnect?")
                             self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
-                            time.sleep(0.5)
-                        time.sleep(0.3)
+                            time.sleep(0.2)
+                        time.sleep(0.12)
                         continue
                     consecutive_errors = 0
 
@@ -822,7 +840,7 @@ class StockfishBot(multiprocess.Process):
                             move_list = new_move_list
                             break
 
-                    time.sleep(0.15)
+                    time.sleep(0.04)
 
                 # Apply opponent move to board
                 try:
@@ -836,7 +854,8 @@ class StockfishBot(multiprocess.Process):
                     else:
                         black_moves.append(move_uci)
                     try:
-                        best_move = stockfish.get_best_move_time(300)
+                        # FAST: 50ms is enough for accuracy tracking, avoids 300ms stall per opponent move
+                        best_move = stockfish.get_best_move_time(50)
                     except Exception as e:
                         logger.debug("get_best_move_time failed: %s", e)
                         best_move = None

@@ -40,9 +40,9 @@ class ChesscomGrabber(Grabber):
 
     def update_board_elem(self):
         """Resilient board lookup with WebDriverWait + fallback chain + retry on stale."""
-        for attempt in range(3):
+        for attempt in range(2):
             try:
-                elem = self._find_with_retry(self.BOARD_SELECTORS, timeout=6)
+                elem = self._find_with_retry(self.BOARD_SELECTORS, timeout=2)
                 self._board_elem = elem
                 if elem is None:
                     logger.warning("update_board_elem: no board found (attempt %d)", attempt + 1)
@@ -51,7 +51,7 @@ class ChesscomGrabber(Grabber):
                 return
             except (StaleElementReferenceException, WebDriverException) as e:
                 logger.debug("update_board_elem stale attempt %d: %s", attempt, e)
-                time.sleep(0.2 * (2 ** attempt))
+                time.sleep(0.08 * (2 ** attempt))
         self._board_elem = None
 
     def is_white(self):
@@ -147,11 +147,11 @@ class ChesscomGrabber(Grabber):
                 return num == "1"
             except StaleElementReferenceException as e:
                 logger.debug("is_white stale retry %d: %s", attempt, e)
-                time.sleep(0.2 * (2 ** attempt))
+                time.sleep(0.06 * (2 ** attempt))
                 continue
             except Exception as e:
                 logger.debug("is_white error attempt %d: %s", attempt, e)
-                time.sleep(0.2)
+                time.sleep(0.06)
                 continue
         return None
 
@@ -170,7 +170,7 @@ class ChesscomGrabber(Grabber):
                 except NoSuchElementException:
                     return False
             except StaleElementReferenceException:
-                time.sleep(0.15)
+                time.sleep(0.05)
                 continue
             except WebDriverException as e:
                 logger.debug("is_game_over WebDriverException: %s", e)
@@ -246,7 +246,7 @@ class ChesscomGrabber(Grabber):
                         logger.debug("global fallback error: %s", e)
                     logger.debug("get_move_list: no move list container found (attempt %d)", attempt)
                     if attempt < 2:
-                        time.sleep(0.3 * (2 ** attempt))
+                        time.sleep(0.08 * (2 ** attempt))
                         continue
                     # Final fallback: if we have cached moves, return them; else [] (empty board) not None to avoid ERR_MOVES
                     if self.moves_list:
@@ -260,7 +260,7 @@ class ChesscomGrabber(Grabber):
                 try:
                     visible_moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
                 except StaleElementReferenceException:
-                    time.sleep(0.15)
+                    time.sleep(0.05)
                     visible_moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
 
                 if len(visible_moves) == 0 and self.moves_list:
@@ -274,7 +274,7 @@ class ChesscomGrabber(Grabber):
                     else:
                         moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]:not([data-processed])")
                 except StaleElementReferenceException:
-                    time.sleep(0.15)
+                    time.sleep(0.05)
                     if not self.moves_list:
                         moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
                     else:
@@ -327,11 +327,11 @@ class ChesscomGrabber(Grabber):
 
             except StaleElementReferenceException as e:
                 logger.debug("get_move_list stale retry %d: %s", attempt, e)
-                time.sleep(0.2 * (2 ** attempt))
+                time.sleep(0.06 * (2 ** attempt))
                 continue
             except WebDriverException as e:
                 logger.debug("get_move_list WebDriverException attempt %d: %s", attempt, e)
-                time.sleep(0.2)
+                time.sleep(0.06)
                 if attempt == 2:
                     return None
                 continue

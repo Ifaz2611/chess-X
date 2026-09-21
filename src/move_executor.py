@@ -45,7 +45,7 @@ class MoveExecutor:
         time.sleep(self.mouse_latency)
         pyautogui.dragTo(end_pos[0], end_pos[1])
         if len(move) == 5:
-            time.sleep(0.15)
+            time.sleep(0.04)
             promo = move[4].lower()
             target_file = move[2]
             target_rank = int(move[3])

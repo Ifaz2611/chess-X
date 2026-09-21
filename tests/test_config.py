@@ -76,4 +76,4 @@ def test_config_defaults_when_missing(tmp_path):
     loaded = dummy._load_config()
     assert loaded["website"] == "chesscom"
     assert loaded["skill_level"] == 20
-    assert loaded["slow_mover"] == 100
+    assert loaded["slow_mover"] == 60

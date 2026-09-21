@@ -147,8 +147,6 @@ class GUI:
         tk.Label(title, text="CHESS", font=self.F_TITLE, fg=TEXT_PRIMARY, bg=BG_CARD).pack(side="left")
         tk.Label(title, text="-X", font=self.F_TITLE, fg=ACCENT, bg=BG_CARD).pack(side="left")
         tk.Label(title, text="  STOCKFISH BOT", font=self.F_SMALL, fg=TEXT_MUTED, bg=BG_CARD).pack(side="left", padx=(8, 0), pady=(8, 0))
-        tk.Label(inner, text="1 Start   ·   2 Stop   ·   Esc Kill", font=self.F_SMALL,
-                 fg=TEXT_MUTED, bg=BG_CARD).pack(side="right", anchor="s", pady=(0, 3))
 
         status = tk.Frame(inner, bg=DANGER_BG, highlightbackground="#E2C4BF", highlightthickness=1)
         status.pack(side="right", padx=(0, 18))
@@ -262,9 +260,9 @@ class GUI:
         self.enable_non_stop_matches = tk.IntVar(value=0)
         self.enable_bongcloud = tk.IntVar(value=0)
         self.mouse_latency = tk.DoubleVar(value=0.0)
-        self.slow_mover = tk.IntVar(value=100)
+        self.slow_mover = tk.IntVar(value=60)
         self.skill_level = tk.IntVar(value=20)
-        self.stockfish_depth = tk.IntVar(value=15)
+        self.stockfish_depth = tk.IntVar(value=13)
         self.enable_topmost = tk.IntVar(value=1)
 
         site = self._card(parent, "Platform")
@@ -1519,9 +1517,9 @@ class GUI:
                 "enable_non_stop_matches": 0,
                 "enable_bongcloud": 0,
                 "mouse_latency": 0.0,
-                "slow_mover": 100,
+                "slow_mover": 60,
                 "skill_level": 20,
-                "stockfish_depth": 15,
+                "stockfish_depth": 13,
                 "enable_topmost": 1,
                 "version": 2,
             }
@@ -1540,9 +1538,9 @@ class GUI:
                 kw["enable_non_stop_matches"] = int(self.enable_non_stop_matches.get()) if hasattr(self, "enable_non_stop_matches") else 0
                 kw["enable_bongcloud"] = int(self.enable_bongcloud.get()) if hasattr(self, "enable_bongcloud") else 0
                 kw["mouse_latency"] = float(self.mouse_latency.get()) if hasattr(self, "mouse_latency") else 0.0
-                kw["slow_mover"] = int(self.slow_mover.get()) if hasattr(self, "slow_mover") else 100
+                kw["slow_mover"] = int(self.slow_mover.get()) if hasattr(self, "slow_mover") else 60
                 kw["skill_level"] = int(self.skill_level.get()) if hasattr(self, "skill_level") else 20
-                kw["stockfish_depth"] = int(self.stockfish_depth.get()) if hasattr(self, "stockfish_depth") else 15
+                kw["stockfish_depth"] = int(self.stockfish_depth.get()) if hasattr(self, "stockfish_depth") else 13
                 kw["enable_topmost"] = int(self.enable_topmost.get()) if hasattr(self, "enable_topmost") else 1
             except Exception as e:
                 logger.debug("_save_config collect error: %s", e)

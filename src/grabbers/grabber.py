@@ -36,7 +36,7 @@ class Grabber(ABC):
 
     def get_top_left_corner(self):
         """Returns the coordinates of the top left corner of the Chrome window, resilient to stale/disconnect."""
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 canvas_x_offset = self.chrome.execute_script(
                     "return window.screenX + (window.outerWidth - window.innerWidth) / 2 - window.scrollX;"
@@ -47,7 +47,7 @@ class Grabber(ABC):
                 return canvas_x_offset, canvas_y_offset
             except (StaleElementReferenceException, WebDriverException) as e:
                 logger.debug("get_top_left_corner attempt %d failed: %s", attempt, e)
-                time.sleep(0.15 * (2 ** attempt))
+                time.sleep(0.05 * (2 ** attempt))
         # Fallback to 0,0 – better than crashing
         logger.warning("get_top_left_corner failed after retries, returning (0,0)")
         return 0, 0
@@ -56,7 +56,7 @@ class Grabber(ABC):
     # Resilient helpers
     # -----------------------------------------------------------------------
 
-    def _find_with_retry(self, selectors, timeout=6):
+    def _find_with_retry(self, selectors, timeout=2):
         """Helper: try selectors with fallback + WebDriverWait."""
         elem = find_element_with_fallback(self.chrome, selectors, timeout=timeout)
         return elem
@@ -64,7 +64,7 @@ class Grabber(ABC):
     def _wait_for_any(self, selectors, timeout=6):
         return wait_for_any_element(self.chrome, selectors, timeout=timeout)
 
-    def _retry_call(self, func, *args, max_retries=3, base_delay=0.15, **kwargs):
+    def _retry_call(self, func, *args, max_retries=2, base_delay=0.05, **kwargs):
         delay = base_delay
         last = None
         for i in range(max_retries + 1):
@@ -93,7 +93,7 @@ class Grabber(ABC):
         """Check that board (and optionally move list) selectors resolve. Returns (ok:bool, details:dict)."""
         details = {"board": False, "move_list": False, "board_selector": None, "move_selector": None}
         # Board
-        board = self._find_with_retry(getattr(self, "BOARD_SELECTORS", []), timeout=5)
+        board = self._find_with_retry(getattr(self, "BOARD_SELECTORS", []), timeout=2)
         if board is not None:
             details["board"] = True
             # try to find which selector worked
@@ -107,7 +107,7 @@ class Grabber(ABC):
         # Move list (optional – may be empty at game start)
         ml_selectors = getattr(self, "MOVE_LIST_SELECTORS", [])
         if ml_selectors:
-            ml = self._find_with_retry(ml_selectors, timeout=3)
+            ml = self._find_with_retry(ml_selectors, timeout=1)
             if ml is not None:
                 details["move_list"] = True
                 for by, val in ml_selectors:
