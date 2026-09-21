@@ -121,6 +121,22 @@ class Grabber(ABC):
                 # move list may legitimately be absent on fresh board
                 details["move_list"] = None
         ok = details["board"]
+        # Warn if only last-resort fallback matched (brittle DOM)
+        try:
+            selectors = getattr(self, "BOARD_SELECTORS", [])
+            if ok and selectors and details.get("board_selector"):
+                last = selectors[-1]
+                last_str = f"{last[0]}={last[1]}"
+                if details["board_selector"] == last_str:
+                    logger.warning("Board selector matched only last-resort fallback %s – DOM may have changed! Consider updating BOARD_SELECTORS", last_str)
+            ml_selectors = getattr(self, "MOVE_LIST_SELECTORS", [])
+            if ml_selectors and details.get("move_selector"):
+                last_ml = ml_selectors[-1]
+                last_ml_str = f"{last_ml[0]}={last_ml[1]}"
+                if details["move_selector"] == last_ml_str:
+                    logger.warning("Move-list selector matched only last-resort fallback %s", last_ml_str)
+        except Exception:
+            pass
         logger.info("Health check %s: %s", "PASS" if ok else "FAIL", details)
         return ok, details
 
