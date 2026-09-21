@@ -22,7 +22,8 @@
 
 <br />
 
-<img width="900" alt="Chess-X control panel" src="https://github.com/user-attachments/assets/19b250cb-802e-4494-ad2b-f8f1de07b78b" />
+<img width="898" height="785" alt="image" src="https://github.com/user-attachments/assets/a8db0359-e0dd-467a-b7bb-08ef284b394c" />
+
 
 <br /><br />
 
