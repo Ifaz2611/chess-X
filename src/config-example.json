@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "stockfish_path": "C:/path/to/stockfish.exe",
   "website": "chesscom",
   "enable_manual_mode": false,

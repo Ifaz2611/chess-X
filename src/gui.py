@@ -1313,111 +1313,87 @@ class GUI:
             messagebox.showerror("Error", f"Failed to write PGN: {e}")
 
     def _config_path(self):
-        # Central config location — keep simple and predictable
-        return os.path.join("src", "config.json")
+        # Central config location — delegates to config_store single source
+        try:
+            from config_store import default_config_path as _dcp
+            return str(_dcp())
+        except Exception:
+            return os.path.join("src", "config.json")
 
-    # ── Full config persistence (P1: Persist config) ─────────────────
+    # ── Config persistence via single source of truth (config_store) ──
     def _load_config(self):
-        """Load full GUI config from JSON. Returns dict with defaults merged."""
-        import json as _json
-        defaults = {
-            "stockfish_path": "",
-            "website": "chesscom",
-            "enable_manual_mode": False,
-            "enable_mouseless_mode": False,
-            "enable_non_stop_puzzles": 0,
-            "enable_non_stop_matches": 0,
-            "enable_bongcloud": 0,
-            "mouse_latency": 0.0,
-            "slow_mover": 100,
-            "skill_level": 20,
-            "stockfish_depth": 15,
-            "enable_topmost": 1,
-        }
-        cfg_path = self._config_path()
-        candidates = [cfg_path, "config.json", os.path.join(os.path.expanduser("~"), ".chess-x.json"), os.path.join("src", "config.json")]
-        # deduplicate preserving order
-        seen = set()
-        ordered = []
-        for c in candidates:
-            if c not in seen:
-                seen.add(c)
-                ordered.append(c)
-        for p in ordered:
+        """Load config via config_store (versioned schema, validation, migration)."""
+        try:
+            from config_store import load_config as _load
+            # honor the GUI's config path (supports tests that monkeypatch _config_path)
             try:
-                if os.path.exists(p):
-                    with open(p, "r", encoding="utf-8") as fh:
-                        data = _json.load(fh)
-                        if not isinstance(data, dict):
-                            continue
-                        # merge
-                        merged = dict(defaults)
-                        for k in defaults:
-                            if k in data:
-                                merged[k] = data[k]
-                        # stockfish_path backward compat
-                        if "stockfish" in data and not merged.get("stockfish_path"):
-                            merged["stockfish_path"] = data.get("stockfish") or ""
-                        # validate stockfish path exists else clear
-                        sp = merged.get("stockfish_path")
-                        if sp and not os.path.exists(sp):
-                            logger.warning("Saved stockfish path not found on disk: %s", sp)
-                            merged["stockfish_path"] = ""
-                        elif sp and not self._is_valid_stockfish(sp, quick_check=True):
-                            logger.warning("Saved stockfish path invalid: %s", sp)
-                            # keep but warn; don't clear – user may have custom name
-                        # clamp numeric
-                        try:
-                            merged["mouse_latency"] = max(0.0, min(15.0, float(merged["mouse_latency"])))
-                            merged["slow_mover"] = max(10, min(1000, int(merged["slow_mover"])))
-                            merged["skill_level"] = max(0, min(20, int(merged["skill_level"])))
-                            merged["stockfish_depth"] = max(1, min(20, int(merged["stockfish_depth"])))
-                            merged["enable_topmost"] = 1 if int(merged["enable_topmost"]) else 0
-                            merged["website"] = "lichess" if str(merged["website"]).lower() in ("lichess", "lichess.org") else "chesscom"
-                        except Exception:
-                            pass
-                        logger.info("Loaded config from %s", p)
-                        return merged
-            except Exception as e:
-                logger.debug("load config %s failed: %s", p, e)
-        return defaults
+                explicit = self._config_path()
+            except Exception:
+                explicit = None
+            cfg = _load(explicit) if explicit else _load()
+            # if explicit path missing and generic load returned defaults, try fallback candidate search
+            # (keeps old behavior of checking config.json, ~/.chess-x.json)
+            if explicit and not os.path.exists(explicit):
+                # explicit missing – try generic load as fallback (old code checked multiple candidates)
+                try:
+                    from config_store import load_config as _load2
+                    cfg2 = _load2()
+                    # if cfg2 is non-default (has non-empty website etc), prefer it
+                    if cfg2.to_dict() != cfg.to_dict():
+                        cfg = cfg2
+                except Exception:
+                    pass
+            d = cfg.to_dict()
+            # extra GUI-level check: quick stockfish validity warning (keep path if custom name)
+            sp = d.get("stockfish_path")
+            if sp and not self._is_valid_stockfish(sp, quick_check=True):
+                logger.warning("Saved stockfish path looks invalid: %s", sp)
+            # return as plain dict for backwards compat (tests expect dict)
+            # drop version from dict if caller expects old shape? keep it – harmless
+            return d
+        except Exception as e:
+            logger.debug("_load_config via config_store failed: %s", e, exc_info=True)
+            # fallback defaults
+            return {
+                "stockfish_path": "",
+                "website": "chesscom",
+                "enable_manual_mode": False,
+                "enable_mouseless_mode": False,
+                "enable_non_stop_puzzles": 0,
+                "enable_non_stop_matches": 0,
+                "enable_bongcloud": 0,
+                "mouse_latency": 0.0,
+                "slow_mover": 100,
+                "skill_level": 20,
+                "stockfish_depth": 15,
+                "enable_topmost": 1,
+                "version": 2,
+            }
 
     def _save_config(self):
-        """Persist current GUI values to JSON (debounced caller should use _schedule_save)."""
-        import json as _json
-        cfg = self._config_path()
+        """Persist current GUI values via config_store (atomic, versioned)."""
         try:
-            os.makedirs(os.path.dirname(cfg) if os.path.dirname(cfg) else ".", exist_ok=True)
-            data = {}
-            if os.path.exists(cfg):
-                try:
-                    with open(cfg, "r", encoding="utf-8") as fh:
-                        data = _json.load(fh)
-                        if not isinstance(data, dict):
-                            data = {}
-                except Exception:
-                    data = {}
-            # collect current values
+            from config_store import Config as _Cfg, save_config as _save
+            kw: dict = {}
             try:
-                data["stockfish_path"] = getattr(self, "stockfish_path", "") or ""
-                data["website"] = self.website.get() if hasattr(self, "website") else "chesscom"
-                data["enable_manual_mode"] = bool(self.enable_manual_mode.get()) if hasattr(self, "enable_manual_mode") else False
-                data["enable_mouseless_mode"] = bool(self.enable_mouseless_mode.get()) if hasattr(self, "enable_mouseless_mode") else False
-                data["enable_non_stop_puzzles"] = int(self.enable_non_stop_puzzles.get()) if hasattr(self, "enable_non_stop_puzzles") else 0
-                data["enable_non_stop_matches"] = int(self.enable_non_stop_matches.get()) if hasattr(self, "enable_non_stop_matches") else 0
-                data["enable_bongcloud"] = int(self.enable_bongcloud.get()) if hasattr(self, "enable_bongcloud") else 0
-                data["mouse_latency"] = float(self.mouse_latency.get()) if hasattr(self, "mouse_latency") else 0.0
-                data["slow_mover"] = int(self.slow_mover.get()) if hasattr(self, "slow_mover") else 100
-                data["skill_level"] = int(self.skill_level.get()) if hasattr(self, "skill_level") else 20
-                data["stockfish_depth"] = int(self.stockfish_depth.get()) if hasattr(self, "stockfish_depth") else 15
-                data["enable_topmost"] = int(self.enable_topmost.get()) if hasattr(self, "enable_topmost") else 1
+                kw["stockfish_path"] = getattr(self, "stockfish_path", "") or ""
+                kw["website"] = self.website.get() if hasattr(self, "website") else "chesscom"
+                kw["enable_manual_mode"] = bool(self.enable_manual_mode.get()) if hasattr(self, "enable_manual_mode") else False
+                kw["enable_mouseless_mode"] = bool(self.enable_mouseless_mode.get()) if hasattr(self, "enable_mouseless_mode") else False
+                kw["enable_non_stop_puzzles"] = int(self.enable_non_stop_puzzles.get()) if hasattr(self, "enable_non_stop_puzzles") else 0
+                kw["enable_non_stop_matches"] = int(self.enable_non_stop_matches.get()) if hasattr(self, "enable_non_stop_matches") else 0
+                kw["enable_bongcloud"] = int(self.enable_bongcloud.get()) if hasattr(self, "enable_bongcloud") else 0
+                kw["mouse_latency"] = float(self.mouse_latency.get()) if hasattr(self, "mouse_latency") else 0.0
+                kw["slow_mover"] = int(self.slow_mover.get()) if hasattr(self, "slow_mover") else 100
+                kw["skill_level"] = int(self.skill_level.get()) if hasattr(self, "skill_level") else 20
+                kw["stockfish_depth"] = int(self.stockfish_depth.get()) if hasattr(self, "stockfish_depth") else 15
+                kw["enable_topmost"] = int(self.enable_topmost.get()) if hasattr(self, "enable_topmost") else 1
             except Exception as e:
                 logger.debug("_save_config collect error: %s", e)
-            with open(cfg, "w", encoding="utf-8") as fh:
-                _json.dump(data, fh, indent=2)
-            logger.debug("Saved config to %s", cfg)
+            cfg = _Cfg.from_dict(kw)
+            _save(cfg, self._config_path())
         except Exception as e:
-            logger.debug("save config failed: %s", e)
+            logger.debug("save config via config_store failed: %s", e, exc_info=True)
 
     def _apply_config_values(self):
         """Apply loaded config dict to tkinter variables (call after vars created)."""
