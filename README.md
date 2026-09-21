@@ -148,23 +148,34 @@ If you do not have screenshots yet, remove this section or replace the paths wit
 ```
 chess-X/
 ├── src/
-│   ├── gui.py                      # Tkinter GUI, process lifecycle, IPC (825 LOC)
-│   ├── stockfish_bot.py            # Core bot loop, move execution, eval pipeline (483 LOC)
-│   ├── overlay.py                  # PyQt6 transparent overlay — arrow + eval bar (298 LOC)
-│   ├── utilities.py                # attach_to_session, char_to_num helpers
+│   ├── gui.py                      # Tkinter orchestrator (delegates to extracted modules)
+│   ├── stockfish_bot.py            # Facade over BoardSync/EngineService/MoveExecutor/GameLoop
+│   ├── config_store.py             # Versioned Config (v2) – single source of truth, migrate/validate
+│   ├── protocol.py                 # Typed dataclass IPC (Pipe/Queue) – replaces ad-hoc strings
+│   ├── browser_session.py          # ChromeDriver lifecycle (WD-manager + Selenium Manager, atexit)
+│   ├── hotkeys.py                  # HotkeyManager (keyboard, extracted)
+│   ├── controls.py / eval_panel.py # GUI controls & eval bar helpers (extracted)
+│   ├── board_sync.py               # DOM <-> chess.Board, takeback/FEN resync
+│   ├── engine_service.py           # Stockfish settings/queries, cp-loss accuracy, material
+│   ├── move_executor.py            # Square -> screen mapping, promotion clicks
+│   ├── game_loop.py                # Loop state helpers
+│   ├── analysis.py                 # PGN import, eval, accuracy (Phase5)
+│   ├── puzzle_trainer.py           # Hint/reveal-after-attempt trainer (Phase5)
+│   ├── local_board.py              # Offline python-chess vs-engine board (Phase5)
+│   ├── overlay.py                  # PyQt6 transparent overlay (now handles typed Overlay* msgs)
+│   ├── utilities.py                # logging, retry, attach_to_session, keyboard helpers
 │   ├── grabbers/
-│   │   ├── grabber.py              # Abstract Grabber — board/moves/color/game-over contract
-│   │   ├── chesscom_grabber.py     # chess.com DOM selectors (board-play-computer / board-single)
-│   │   └── lichess_grabber.py      # lichess DOM + WebSocket mouseless + puzzle detection
-│   └── assets/
-│       └── pawn_32x32.png          # Window icon
-├── docs/
-│   └── screenshots/                # README images/GIFs (optional, add your own)
-├── requirements.txt
-├── run.bat                         # venv\Scripts\python.exe src\gui.py
-├── TODO.md                         # Roadmap & improvement backlog
-├── LICENSE                         # MIT
-└── README.md
+│   │   ├── grabber.py              # Abstract Grabber + health_check with fallback warning
+│   │   ├── chesscom_grabber.py     # chess.com selectors
+│   │   └── lichess_grabber.py      # lichess selectors
+│   └── assets/pawn_32x32.png
+├── tests/
+│   ├── fixtures/chesscom.html, lichess.html  # Offline HTML fixtures
+│   ├── test_board_sync.py          # BoardSync: new game/takeback/FEN/promotion/mate + config migration
+│   ├── test_config.py / test_grabbers.py / etc.
+├── pyproject.toml                  # PEP517, deps (pynput removed), ruff/mypy/pytest config
+├── .github/workflows/ci.yml        # Windows+Linux x Py 3.10-3.12, pytest-cov, ruff, mypy
+├── requirements.txt / run.bat / TODO.md / LICENSE
 ```
 
 ---
