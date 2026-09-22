@@ -59,13 +59,6 @@
 - [ ] **Troubleshooting wiki** — expand FAQ with screenshots, Wayland/Chrome variations, DOM breakages. `P2` `S` `docs`
 - [ ] **Changelog** — `CHANGELOG.md` with semver tags. `P3` `S` `docs`
 
-## 8. Nice-to-Have / Future Exploration (P3)
-
-- [ ] **Voice / chat control** — “start / stop / hint” via voice or chat command.
-- [ ] **Mobile (Android) via ADB** — drive `lichess` mobile app through `uiautomator2`.
-- [ ] **Cloud engine option** — fallback to Lichess Cloud Eval / chess.com analysis API when local Stockfish unavailable.
-- [ ] **Game database** — SQLite history with searchable PGN, eval graphs, accuracy trends.
-- [ ] **Auto-update** — check GitHub releases + self-update Stockfish/ChromeDriver.
 
 ---
 
