@@ -52,14 +52,6 @@
 - [ ] **Refactor process model** — replace `multiprocess` fork + `attach_to_session` hack with `threading`/`concurrent.futures` + BiDi; remove `WebDriver.execute` monkey-patch. `P2` `L` `core`
 - [ ] **Security review** — audit `execute_script` injection (`make_mouseless_move`), file-path handling, `keyboard` privilege surface. `P1` `S` `security`
 
-## 7. Documentation (P2)
-
-- [ ] **Architecture diagram** — Mermaid / draw.io pipeline in `docs/ARCHITECTURE.md`. `P2` `S` `docs`
-- [ ] **Grabber authoring guide** — how to add a new site (implement `Grabber` ABC, selectors, tests). `P2` `S` `docs`
-- [ ] **Troubleshooting wiki** — expand FAQ with screenshots, Wayland/Chrome variations, DOM breakages. `P2` `S` `docs`
-- [ ] **Changelog** — `CHANGELOG.md` with semver tags. `P3` `S` `docs`
-
-
 ---
 
 ## Suggested Next Milestones
