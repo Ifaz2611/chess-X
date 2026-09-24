@@ -22,10 +22,27 @@ class Grabber(ABC):
     BOARD_SELECTORS = []
     MOVE_LIST_SELECTORS = []
 
-    def __init__(self, chrome_url, chrome_session_id):
-        self.chrome = attach_to_session(chrome_url, chrome_session_id)
+    def __init__(self, chrome_url, chrome_session_id, browser: str | None = None):
+        # browser-aware attach (chrome/firefox/edge) – falls back to Chrome for compat
+        try:
+            # Prefer explicit browser, then env, then config
+            if browser is None:
+                import os
+                browser = os.environ.get("CHESSX_BROWSER")
+                if not browser:
+                    try:
+                        from config_store import load_config
+                        cfg = load_config()
+                        browser = getattr(cfg, "browser", "chrome")
+                    except Exception:
+                        browser = "chrome"
+            self.chrome = attach_to_session(chrome_url, chrome_session_id, browser=browser)
+        except TypeError:
+            # legacy attach without browser arg
+            self.chrome = attach_to_session(chrome_url, chrome_session_id)
         self._board_elem = None
         self.moves_list = {}
+        self.browser = browser or "chrome"
 
     def get_board(self):
         return self._board_elem

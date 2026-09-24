@@ -70,6 +70,52 @@ def is_wayland():
     return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or bool(os.environ.get("WAYLAND_DISPLAY"))
 
 
+def is_macos():
+    """True if running on macOS (Darwin)."""
+    return platform.system() == "Darwin"
+
+
+def is_windows():
+    return platform.system() == "Windows"
+
+
+def is_linux():
+    return platform.system() == "Linux"
+
+
+def get_platform_info():
+    """Return dict with platform details (for diagnostics / CI)."""
+    try:
+        from platform_info import get_scaling_factor, get_device_pixel_ratio  # lazy
+        scale = get_scaling_factor()
+        dpr = get_device_pixel_ratio()
+    except Exception:
+        scale = 1.0
+        dpr = 1.0
+    return {
+        "system": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+        "is_wayland": is_wayland(),
+        "is_macos": is_macos(),
+        "is_windows": is_windows(),
+        "is_linux": is_linux(),
+        "scaling": scale,
+        "dpr": dpr,
+    }
+
+
+def check_macos_permissions():
+    """Proxy to platform_info.check_macos_permissions if available."""
+    try:
+        from platform_info import check_macos_permissions as _chk
+        return _chk()
+    except Exception:
+        if not is_macos():
+            return True, "not macos"
+        return True, "macOS permission check unavailable (platform_info not loaded)"
+
+
 def check_linux_input_permissions():
     """Return (ok:bool, message:str) describing keyboard/input group status on Linux."""
     if platform.system() != "Linux":
@@ -242,8 +288,11 @@ def find_element_with_fallback(driver, selectors, timeout=2):
 # attach_to_session – Selenium 4.9 → 4.49 compatible
 # ---------------------------------------------------------------------------
 
-def attach_to_session(executor_url, session_id):
+def attach_to_session(executor_url, session_id, browser: str | None = None):
     """Attaches to a running webdriver. Compatible with Selenium 4.9 .. 4.49.
+
+    Now browser-aware: if browser is firefox/edge, uses correct Options class.
+    Defaults to Chrome for backward compat.
 
     The old implementation used desired_capabilities={} which is removed in newer
     Selenium. We try the modern `options` path first, then fall back to the
@@ -251,6 +300,22 @@ def attach_to_session(executor_url, session_id):
     Returns the webdriver.
     Taken from https://stackoverflow.com/a/48194907/5868441 (adapted).
     """
+    # If browser specified and factory available, delegate
+    if browser is not None:
+        try:
+            from browser_factory import attach_to_session_generic
+            return attach_to_session_generic(executor_url, session_id, browser=browser)
+        except Exception as e:
+            logger.debug("attach_to_session_generic failed (%s), falling back to Chrome path", e)
+    # Env-based browser detection
+    env_browser = os.environ.get("CHESSX_BROWSER")
+    if env_browser and env_browser.lower() in ("firefox", "edge", "ff", "msedge"):
+        try:
+            from browser_factory import attach_to_session_generic
+            return attach_to_session_generic(executor_url, session_id, browser=env_browser)
+        except Exception:
+            pass
+
     original_execute = WebDriver.execute
 
     def new_command_execute(self, command, params=None):

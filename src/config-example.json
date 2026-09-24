@@ -1,7 +1,8 @@
 {
-  "version": 2,
+  "version": 3,
   "stockfish_path": "C:/path/to/stockfish.exe",
   "website": "chesscom",
+  "browser": "chrome",
   "enable_manual_mode": false,
   "enable_mouseless_mode": false,
   "enable_non_stop_puzzles": 0,

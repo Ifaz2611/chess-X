@@ -1,7 +1,9 @@
 import math
 import sys
+import os
 import threading
 import logging
+import platform
 from PyQt6.QtCore import Qt, QPoint, QRect
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QGuiApplication, QPolygon, QFont
 from PyQt6.QtWidgets import QApplication, QWidget
@@ -12,21 +14,87 @@ try:
 except Exception:
     logger = logging.getLogger("overlay")
 
+# Platform helpers (lazy to avoid import cycles)
+def _is_wayland():
+    return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or bool(os.environ.get("WAYLAND_DISPLAY"))
+
+def _is_macos():
+    return platform.system() == "Darwin"
+
+def _get_dpr():
+    try:
+        # Use primary screen DPR
+        screens = QGuiApplication.screens()
+        if screens:
+            return float(screens[0].devicePixelRatio())
+    except Exception:
+        pass
+    return 1.0
+
 
 class OverlayScreen(QWidget):
     def __init__(self, stockfish_queue):
         super().__init__()
         self.stockfish_queue = stockfish_queue
 
-        # Set the window to be the size of the screen
-        self.screen = QGuiApplication.screens()[0]
-        self.setFixedWidth(self.screen.size().width())
-        self.setFixedHeight(self.screen.size().height())
+        # Platform-aware window setup
+        self.screen = QGuiApplication.screens()[0] if QGuiApplication.screens() else None
+        if self.screen is not None:
+            # Handle macOS retina: size is in device pixels, but coords from move_executor are logical
+            dpr = _get_dpr()
+            w = self.screen.size().width()
+            h = self.screen.size().height()
+            # On macOS retina, Qt reports size in device pixels; we keep as is for overlay canvas
+            self.setFixedWidth(w)
+            self.setFixedHeight(h)
+            logger.info("Overlay screen %dx%d DPR=%s Wayland=%s macOS=%s", w, h, dpr, _is_wayland(), _is_macos())
+        else:
+            # Fallback if no screen yet (offscreen tests)
+            self.setFixedWidth(1920)
+            self.setFixedHeight(1080)
 
-        # Set the window to be transparent
+        # Transparent + click-through + always-on-top
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        # Wayland layer-shell: try to use LayerShell if available (via env hint)
+        # We cannot directly use wlr-layer-shell without extra lib, but we can set
+        # Tool flag which works better on Wayland compositors (GNOME/KDE) as overlay
+        if _is_wayland():
+            # On Wayland, FramelessWindowHint+WindowStaysOnTopHint may not produce
+            # always-on-top without xdg-layer-shell. Fall back to Tool + bypass compositor hint
+            flags |= Qt.WindowType.Tool
+            # Hint to Qt to use wayland platform if not already
+            # Check if layer-shell plugin available via env
+            if os.environ.get("CHESSX_WAYLAND_LAYER_SHELL") == "1":
+                try:
+                    # If python-layer-shell is installed, we could use it – probe
+                    import importlib.util
+                    if importlib.util.find_spec("layershell") is not None:
+                        logger.info("layer-shell available, using it for overlay")
+                except Exception:
+                    pass
+            logger.warning("Wayland detected – overlay uses Tool flag; for best results use: QT_QPA_PLATFORM=xcb or install layer-shell-qt. If overlay is invisible, export QT_QPA_PLATFORM=xcb.")
+            # Also try to enable compositor bypass
+            self.setAttribute(Qt.WidgetAttribute.WA_X11DoNotAcceptFocus, True)
+
+        if _is_macos():
+            # macOS specific: ensure overlay appears over fullscreen Chrome
+            # WA_MacAlwaysShowToolWindow keeps tool windows visible
+            try:
+                self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+            except Exception:
+                pass
+            # On macOS, WindowStaysOnTopHint + Tool may be needed for space handling
+            flags |= Qt.WindowType.Tool
+            logger.info("macOS overlay: using Tool + WA_MacAlwaysShowToolWindow for visibility over Chrome. Grant Screen Recording if overlay is invisible.")
+
+        self.setWindowFlags(flags)
+
+        # Opacity / visibility controls (P2 overlay toggle)
+        self._opacity = 1.0  # 0.0-1.0
+        self._visible = True  # hotkey toggle
 
         # A list of QPolygon objects containing the points of the arrows
         self.arrows = []
@@ -48,22 +116,47 @@ class OverlayScreen(QWidget):
         self.eval_bar_y = (self.height() - self.eval_bar_height) // 2  # Default y position
         self.eval_bar_margin = 15  # Margin between board and eval bar
 
+        # Retina-aware scaling for arrow coords (if DPR != 1, incoming coords are logical, overlay is device)
+        # We store DPR and scale incoming arrow coords to device pixels for correct placement
+        self._dpr = _get_dpr() if self.screen else 1.0
+
         # Start the message queue thread (daemon so overlay can exit cleanly)
-        self.message_queue_thread = threading.Thread(target=self.message_queue_thread, daemon=True)
+        self.message_queue_thread = threading.Thread(target=self.message_queue_thread_fn, daemon=True)
         self.message_queue_thread.start()
 
-    def message_queue_thread(self):
+    # -- opacity / toggle helpers --
+    def set_opacity(self, opacity: float):
+        """Set overlay opacity 0.0-1.0."""
+        self._opacity = max(0.0, min(1.0, float(opacity)))
+        self.setWindowOpacity(self._opacity)
+        self.update()
+
+    def toggle_visibility(self):
+        """Toggle overlay hidden/shown (for hotkey)."""
+        self._visible = not self._visible
+        self.setVisible(self._visible)
+        if self._visible:
+            self.update()
+        logger.info("Overlay visibility toggled: %s", self._visible)
+
+    def message_queue_thread_fn(self):
         """
         This thread is used to receive messages from the stockfish message queue
         and update the arrows
-        Args:
-            None
-        Returns:
-            None
         """
 
         while True:
             message = self.stockfish_queue.get()
+            # Check for opacity/toggle commands (dict with keys)
+            try:
+                if isinstance(message, dict) and "overlay_opacity" in message:
+                    self.set_opacity(float(message["overlay_opacity"]))
+                    continue
+                if isinstance(message, dict) and message.get("overlay_toggle"):
+                    self.toggle_visibility()
+                    continue
+            except Exception:
+                pass
             # Typed overlay messages first (no behavior change, just new types)
             try:
                 import protocol as proto  # lazy to avoid circular import at top
@@ -147,6 +240,15 @@ class OverlayScreen(QWidget):
 
         self.arrows = []
         for arrow in arrows:
+            try:
+                dpr = getattr(self, "_dpr", 1.0) or 1.0
+                if dpr != 1.0:
+                    # Scale logical -> device
+                    s = arrow[0]
+                    e = arrow[1]
+                    arrow = ((int(s[0]*dpr), int(s[1]*dpr)), (int(e[0]*dpr), int(e[1]*dpr)))
+            except Exception:
+                pass
             poly = self.get_arrow_polygon(
                 QPoint(arrow[0][0], arrow[0][1]),
                 QPoint(arrow[1][0], arrow[1][1])
@@ -158,6 +260,7 @@ class OverlayScreen(QWidget):
         super().paintEvent(event)
         painter = QPainter(self)
         
+        # Respect opacity for arrows as well
         # Draw arrows
         painter.setPen(QPen(Qt.GlobalColor.red, 1, Qt.PenStyle.NoPen))
         painter.setBrush(QBrush(QColor(255, 0, 0, 122), Qt.BrushStyle.SolidPattern))
@@ -320,6 +423,20 @@ def run(stockfish_queue):
     Returns:
         None
     """
+
+    # Wayland: allow fallback to xcb if native wayland fails for overlay
+    if _is_wayland() and os.environ.get("QT_QPA_PLATFORM") is None:
+        # Don't force, but log hint; user can set QT_QPA_PLATFORM=xcb externally
+        logger.info("Wayland overlay: QT_QPA_PLATFORM not set, Qt will use wayland. If overlay invisible, run with QT_QPA_PLATFORM=xcb python src/gui.py")
+    # macOS: check permissions before showing overlay
+    if _is_macos():
+        try:
+            from platform_info import check_macos_permissions
+            ok, msg = check_macos_permissions()
+            if not ok:
+                logger.warning("macOS permissions: %s", msg)
+        except Exception:
+            pass
 
     app = QApplication(sys.argv)
     overlay = OverlayScreen(stockfish_queue)

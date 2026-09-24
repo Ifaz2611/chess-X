@@ -24,6 +24,24 @@ dev = [
     "mypy>=1.10",
     "pre-commit>=3.5",
 ]
+packaging = [
+    "pyinstaller>=6.0",
+    "briefcase>=0.3.20",
+]
+wayland = [
+    "pynput>=1.7",
+]
+macos = [
+    "pyobjc-framework-Quartz>=10.0; sys_platform=='darwin'",
+    "pyobjc-framework-ApplicationServices>=10.0; sys_platform=='darwin'",
+]
+firefox = [
+    "webdriver-manager>=4.0",
+]
+all = [
+    "pynput>=1.7",
+    "pyinstaller>=6.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -51,3 +69,32 @@ exclude = ["\\.venv"]
 [tool.coverage.run]
 source = ["src"]
 omit = ["*/__pycache__/*", "*/tests/*"]
+
+[tool.briefcase]
+project_name = "Chess-X"
+bundle = "com.chessx"
+description = "Stockfish-powered bot for chess.com and lichess.org"
+author = "Ifaz Md Zahin"
+author_email = "zahin26112004@gmail.com"
+url = "https://github.com/Ifaz2611/chess-X"
+license = "MIT"
+version = "2.1.0"
+
+[tool.briefcase.app.chess-x]
+formal_name = "Chess-X"
+description = "Stockfish-powered bot for chess.com and lichess.org"
+sources = ["src"]
+requires = ["selenium>=4.15", "webdriver-manager>=4.0", "PyAutoGUI>=0.9.54", "chess>=1.10", "stockfish>=3.28", "multiprocess>=0.70", "keyboard>=0.13.5", "PyQt6>=6.7", "packaging>=24"]
+icon = "src/assets/pawn_32x32"
+test_sources = ["tests"]
+
+[tool.briefcase.app.chess-x.macOS]
+requires = ["pyobjc-framework-Quartz>=10.0", "pyobjc-framework-ApplicationServices>=10.0"]
+info = {NSHighResolutionCapable = true, NSScreenCaptureUsageDescription = "Chess-X overlay needs screen recording permission.", NSAppleEventsUsageDescription = "Chess-X needs accessibility access for hotkeys."}
+
+[tool.briefcase.app.chess-x.linux]
+requires = ["pynput>=1.7"]
+system_requires = ["libegl1", "libgl1", "libxkbcommon-x11-0"]
+
+[tool.briefcase.app.chess-x.windows]
+requires = []

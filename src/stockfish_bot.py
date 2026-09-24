@@ -29,7 +29,7 @@ if _kb is None:
 
 
 class StockfishBot(multiprocess.Process):
-    def __init__(self, chrome_url, chrome_session_id, website, pipe, overlay_queue, stockfish_path, enable_manual_mode, enable_mouseless_mode, enable_non_stop_puzzles, enable_non_stop_matches, mouse_latency, slow_mover, skill_level, stockfish_depth, memory=None, cpu_threads=None):
+    def __init__(self, chrome_url, chrome_session_id, website, pipe, overlay_queue, stockfish_path, enable_manual_mode, enable_mouseless_mode, enable_non_stop_puzzles, enable_non_stop_matches, mouse_latency, slow_mover, skill_level, stockfish_depth, memory=None, cpu_threads=None, browser: str | None = None):
         multiprocess.Process.__init__(self)
         self.chrome_url = chrome_url
         self.chrome_session_id = chrome_session_id
@@ -55,6 +55,13 @@ class StockfishBot(multiprocess.Process):
                 self.cpu_threads = max(1, int((os.cpu_count() or 2) // 2))
             except Exception:
                 self.cpu_threads = 1
+        # Browser for webdriver (chrome/firefox/edge)
+        raw_browser = browser if browser is not None else os.environ.get("CHESSX_BROWSER", "chrome")
+        try:
+            from browser_factory import normalize_browser as _nb
+            self.browser = _nb(raw_browser)
+        except Exception:
+            self.browser = str(raw_browser).lower() if raw_browser else "chrome"
         self.is_white = None
         self._stockfish = None
         self._shutdown = False
@@ -452,10 +459,20 @@ class StockfishBot(multiprocess.Process):
 
     def run(self):
         self._setup_signal_handlers()
+        # Browser for attach (chrome/firefox/edge) – via constructor or env
+        _browser = getattr(self, "browser", None)
+        if _browser is None:
+            try:
+                import os as _os
+                _browser = _os.environ.get("CHESSX_BROWSER", "chrome")
+            except Exception:
+                _browser = "chrome"
+        # Also store back for MoveExecutor fallback
+        self.browser = _browser
         if self.website == "chesscom":
-            self.grabber = ChesscomGrabber(self.chrome_url, self.chrome_session_id)
+            self.grabber = ChesscomGrabber(self.chrome_url, self.chrome_session_id, browser=_browser)
         else:
-            self.grabber = LichessGrabber(self.chrome_url, self.chrome_session_id)
+            self.grabber = LichessGrabber(self.chrome_url, self.chrome_session_id, browser=_browser)
         self.grabber.reset_moves_list()
         # Health check on startup
         try:

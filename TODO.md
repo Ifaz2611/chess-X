@@ -37,15 +37,8 @@
 - [ ] **Threat & line display** — show PV arrows/text via `get_top_moves` in overlay/GUI. `P2` `M` `engine/overlay`
 - [ ] **Self-play / analysis mode** — run without browser: load FEN/PGN, step through with eval bar. `P3` `M` `feature`
 
-## 5. Platform & Distribution (P2)
 
-- [ ] **macOS support** — test ChromeDriver + `PyAutoGUI` + overlay on macOS (retina, permissions). `P2` `M` `platform`
-- [ ] **Headless / Docker** — `Dockerfile` + `docker-compose` with headless Chrome, Xvfb, noVNC. `P2` `M` `platform`
-- [ ] **Packaged executable** — `PyInstaller`/`briefcase` one-file build for Windows & Linux. `P2` `M` `packaging`
-- [ ] **Wayland support** — `pynput`/`xdotool`/`ydotool` abstraction, `layer-shell` overlay. `P2` `L` `platform`
-- [ ] **Firefox / Edge support** — abstract `webdriver` creation, allow `geckodriver`/`msedgedriver`. `P3` `S` `platform`
-
-## 6. Code Quality, Testing & DevOps (P1-P2)
+## 5. Code Quality, Testing & DevOps (P1-P2)
 
 - [ ] **Integration harness** — fixtures with static HTML snapshots of chess.com / lichess boards; CI runs grabber parsing without live browser. `P1` `M` `testing`
 - [ ] **Type hints & docstrings** — annotate public methods `Grabber`, `StockfishBot`, `OverlayScreen` with Google-style docstrings. `P2` `M` `quality`

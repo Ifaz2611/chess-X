@@ -37,8 +37,8 @@ class LichessGrabber(Grabber):
         (By.CSS_SELECTOR, "div.puzzle-move-list"),
     ]
 
-    def __init__(self, chrome_url, chrome_session_id):
-        super().__init__(chrome_url, chrome_session_id)
+    def __init__(self, chrome_url, chrome_session_id, browser: str | None = None):
+        super().__init__(chrome_url, chrome_session_id, browser=browser)
         self.tag_name = None
 
     def update_board_elem(self):

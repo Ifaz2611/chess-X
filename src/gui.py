@@ -252,8 +252,27 @@ class GUI:
         except Exception:
             pass
 
+    def _update_browser_radios(self, *_):
+        """Highlight selected browser radio (Chrome/Firefox/Edge)."""
+        try:
+            sel = self.browser.get() if hasattr(self, "browser") else "chrome"
+            for val in ("chrome", "firefox", "edge"):
+                rb = getattr(self, f"browser_{val}_radio", None)
+                if rb is None:
+                    continue
+                is_sel = sel == val
+                rb.configure(
+                    bg=ACCENT if is_sel else BG_ELEVATED,
+                    fg="#FFFFFF" if is_sel else "#000000",
+                    activebackground=ACCENT_HI if is_sel else BG_ELEVATED,
+                    selectcolor=ACCENT,
+                )
+        except Exception:
+            pass
+
     def _build_controls(self, parent):
         self.website = tk.StringVar(value="chesscom")
+        self.browser = tk.StringVar(value="chrome")
         self.enable_manual_mode = tk.BooleanVar(value=False)
         self.enable_mouseless_mode = tk.BooleanVar(value=False)
         self.enable_non_stop_puzzles = tk.IntVar(value=0)
@@ -279,6 +298,33 @@ class GUI:
                 self.website.trace("w", lambda *_: self._update_platform_radios())
             except Exception:
                 pass
+        # Browser selector (Chrome/Firefox/Edge) – new for P2 platform support
+        brow_row = tk.Frame(site, bg=BG_ELEVATED)
+        brow_row.pack(fill="x", pady=(8, 0))
+        tk.Label(brow_row, text="Browser", font=self.F_SMALL, fg=TEXT_MUTED, bg=BG_ELEVATED).pack(side="left", padx=(8, 4))
+        for val, label in [("chrome", "Chrome"), ("firefox", "Firefox"), ("edge", "Edge")]:
+            rb = tk.Radiobutton(brow_row, text=label, variable=self.browser, value=val, indicatoron=0,
+                                bg=BG_ELEVATED, fg="#000000", selectcolor=ACCENT,
+                                activebackground=BG_ELEVATED, relief="flat", bd=0, pady=5, padx=8,
+                                command=self._update_browser_radios)
+            rb.pack(side="left", fill="x", expand=True, padx=1)
+            setattr(self, f"browser_{val}_radio", rb)
+        try:
+            self.browser.trace_add("write", lambda *_: self._update_browser_radios())
+        except Exception:
+            try:
+                self.browser.trace("w", lambda *_: self._update_browser_radios())
+            except Exception:
+                pass
+        # Platform info hint (Wayland/macOS) – shown once
+        try:
+            from platform_info import is_wayland, is_macos  # type: ignore
+            if is_wayland():
+                tk.Label(site, text="Wayland detected – overlay/input may need pynput/xdotool; export QT_QPA_PLATFORM=xcb for best overlay.", font=("Segoe UI", 7), fg=WARNING, bg=BG_CARD, wraplength=320, justify="left").pack(fill="x", pady=(6, 0))
+            if is_macos():
+                tk.Label(site, text="macOS: grant Accessibility + Screen Recording to Terminal/Python; run xattr -d com.apple.quarantine on drivers if needed.", font=("Segoe UI", 7), fg=WARNING, bg=BG_CARD, wraplength=320, justify="left").pack(fill="x", pady=(4, 0))
+        except Exception:
+            pass
 
         controls = self._card(parent, "Controls")
         self.open_browser_button = self._button(controls, "OPEN BROWSER", self.on_open_browser_button_listener, CYAN)
@@ -399,6 +445,16 @@ class GUI:
         self._config = self._load_config()
         self.stockfish_path = self._config.get("stockfish_path") or self._load_stockfish_path()
         self._apply_config_values()
+        # Sync BrowserSessionManager with persisted browser choice
+        try:
+            bm = getattr(self, "_browser_manager", None)
+            if bm is not None:
+                b = self._config.get("browser") or (self.browser.get() if hasattr(self, "browser") else "chrome")
+                bm.browser = b
+                import os as _os
+                _os.environ["CHESSX_BROWSER"] = b
+        except Exception:
+            pass
         self._refresh_stockfish_label()
         self._setup_config_autosave()
         self._setup_validation_traces()
@@ -1063,10 +1119,17 @@ class GUI:
         bm = getattr(self, "_browser_manager", None)
         if bm is not None:
             website = self.website.get() if hasattr(self, "website") else "chesscom"
-            ok = bm.open(website)
+            browser = self.browser.get() if hasattr(self, "browser") else "chrome"
+            # keep env in sync for grabbers / StockfishBot
+            try:
+                import os as _os2
+                _os2.environ["CHESSX_BROWSER"] = browser
+            except Exception:
+                pass
+            ok = bm.open(website, browser=browser)
             if not ok:
-                _fail_reset("ChromeDriver error",
-                    "Failed to start Chrome. Check logs/chess-x.log for details. Ensure Chrome is installed and no other ChromeDriver is stuck. Try deleting %USERPROFILE%\\.wdm and retry.")
+                _fail_reset(f"{browser.capitalize()}Driver error",
+                    f"Failed to start {browser}. Check logs/chess-x.log for details. Ensure {browser} is installed and no other driver is stuck. Try deleting %USERPROFILE%\\.wdm and retry. Selenium Manager fallback was also attempted.")
                 return
             # sync GUI attrs from manager (keeps old code paths working)
             self.chrome = bm.chrome
@@ -1301,6 +1364,7 @@ class GUI:
             self.enable_non_stop_puzzles.get() == 1, self.enable_non_stop_matches.get() == 1,
             self.mouse_latency.get(), self.slow_mover.get(),
             self.skill_level.get(), self.stockfish_depth.get(),
+            browser=self.browser.get() if hasattr(self, "browser") else "chrome",
         )
         self.stockfish_bot_process.start()
         # Lazy import overlay so importing gui (e.g. in tests) does not require PyQt6 / EGL
@@ -1509,6 +1573,7 @@ class GUI:
             return {
                 "stockfish_path": "",
                 "website": "chesscom",
+                "browser": "chrome",
                 "enable_manual_mode": False,
                 "enable_mouseless_mode": False,
                 "enable_non_stop_puzzles": 0,
@@ -1518,7 +1583,7 @@ class GUI:
                 "skill_level": 20,
                 "stockfish_depth": 13,
                 "enable_topmost": 1,
-                "version": 2,
+                "version": 3,
             }
 
     def _save_config(self):
@@ -1529,6 +1594,7 @@ class GUI:
             try:
                 kw["stockfish_path"] = getattr(self, "stockfish_path", "") or ""
                 kw["website"] = self.website.get() if hasattr(self, "website") else "chesscom"
+                kw["browser"] = self.browser.get() if hasattr(self, "browser") else "chrome"
                 kw["enable_manual_mode"] = bool(self.enable_manual_mode.get()) if hasattr(self, "enable_manual_mode") else False
                 kw["enable_mouseless_mode"] = bool(self.enable_mouseless_mode.get()) if hasattr(self, "enable_mouseless_mode") else False
                 kw["enable_non_stop_puzzles"] = int(self.enable_non_stop_puzzles.get()) if hasattr(self, "enable_non_stop_puzzles") else 0
@@ -1551,6 +1617,22 @@ class GUI:
         try:
             if "website" in cfg:
                 try: self.website.set(cfg["website"])
+                except Exception: pass
+            if "browser" in cfg:
+                try:
+                    self.browser.set(cfg["browser"])
+                    # keep manager in sync and env for grabbers
+                    try:
+                        bm = getattr(self, "_browser_manager", None)
+                        if bm is not None:
+                            bm.browser = cfg["browser"]
+                    except Exception:
+                        pass
+                    try:
+                        import os as _os
+                        _os.environ["CHESSX_BROWSER"] = cfg["browser"]
+                    except Exception:
+                        pass
                 except Exception: pass
             if "enable_manual_mode" in cfg:
                 try: self.enable_manual_mode.set(bool(cfg["enable_manual_mode"]))
@@ -1589,6 +1671,8 @@ class GUI:
             except Exception: pass
             try: self._update_platform_radios()
             except Exception: pass
+            try: self._update_browser_radios()
+            except Exception: pass
         except Exception as e:
             logger.debug("_apply_config_values error: %s", e)
 
@@ -1606,7 +1690,7 @@ class GUI:
     def _setup_config_autosave(self):
         """Wire traces on all persisted vars so changes auto-save."""
         try:
-            for var in [self.website, self.enable_manual_mode, self.enable_mouseless_mode,
+            for var in [self.website, self.browser, self.enable_manual_mode, self.enable_mouseless_mode,
                         self.enable_non_stop_puzzles, self.enable_non_stop_matches,
                         self.mouse_latency, self.slow_mover,
                         self.skill_level, self.stockfish_depth,

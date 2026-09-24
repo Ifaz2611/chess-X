@@ -1,26 +1,3 @@
-"""Single source of truth for Chess-X configuration.
-
-Versioned schema + validation + migration. Used by GUI and tests.
-
-Schema v2 (current):
-  version: int = 2
-  stockfish_path: str = ""
-  website: str = "chesscom"  # chesscom | lichess
-  enable_manual_mode: bool = False
-  enable_mouseless_mode: bool = False
-  enable_non_stop_puzzles: int = 0
-  enable_non_stop_matches: int = 0
-  mouse_latency: float = 0.0
-  slow_mover: int = 100
-  skill_level: int = 20
-  stockfish_depth: int = 15
-  enable_topmost: int = 1
-
-Migration from v1 (no version field, may contain memory/cpu_threads/stockfish):
-  - drop memory/cpu_threads
-  - rename stockfish -> stockfish_path
-  - add version=2
-"""
 from __future__ import annotations
 
 import json
@@ -34,12 +11,13 @@ from utilities import get_logger
 
 logger = get_logger("config_store")
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 DEFAULTS: dict[str, Any] = {
     "version": CONFIG_VERSION,
     "stockfish_path": "",
     "website": "chesscom",
+    "browser": "chrome",
     "enable_manual_mode": False,
     "enable_mouseless_mode": False,
     "enable_non_stop_puzzles": 0,
@@ -60,6 +38,7 @@ class Config:
     version: int = CONFIG_VERSION
     stockfish_path: str = ""
     website: str = "chesscom"
+    browser: str = "chrome"
     enable_manual_mode: bool = False
     enable_mouseless_mode: bool = False
     enable_non_stop_puzzles: int = 0
@@ -107,6 +86,9 @@ def migrate(data: dict[str, Any]) -> dict[str, Any]:
     for k in list(out.keys()):
         if k in LEGACY_KEYS:
             out.pop(k, None)
+    # v2 -> v3: ensure browser
+    if ver < 3 and "browser" not in out:
+        out["browser"] = "chrome"
     # ensure defaults for missing keys
     for k, v in DEFAULTS.items():
         if k not in out:
@@ -136,6 +118,17 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
         out["website"] = "lichess" if w in ("lichess", "lichess.org") else "chesscom"
     except Exception:
         out["website"] = "chesscom"
+    # browser: chrome | firefox | edge
+    try:
+        b = str(out.get("browser", "chrome")).lower().strip()
+        # normalize aliases
+        aliases = {"chromium": "chrome", "google-chrome": "chrome", "ff": "firefox", "gecko": "firefox", "msedge": "edge", "msedgedriver": "edge"}
+        b = aliases.get(b, b)
+        if b not in ("chrome", "firefox", "edge"):
+            b = "chrome"
+        out["browser"] = b
+    except Exception:
+        out["browser"] = "chrome"
     # booleans
     for k in ("enable_manual_mode", "enable_mouseless_mode"):
         try:
