@@ -483,20 +483,6 @@ Not officially. DOM scraping and mouse automation currently assume a visible bro
 
 ---
 
-## Roadmap
-
-The full prioritised backlog lives in **[TODO.md](TODO.md)**.
-
-- [ ] Human‑like delays, misclicks, and play‑strength profiles
-- [ ] chess.com parity: mouseless, puzzles, non‑stop
-- [ ] Robust selectors with auto‑recovery on DOM changes
-- [ ] Config persistence
-- [ ] Headless mode, Docker image, packaged executable
-- [ ] Broader integration tests + pre‑commit hooks
-
-Pick an item, open an issue, send a PR.
-
----
 
 ## Development
 
@@ -577,7 +563,6 @@ Thanks to every contributor, tester, and bug reporter.
 - **Bugs / features** → [open an issue](https://github.com/Ifaz2611/chess-X/issues)
 - **Questions** → GitHub Discussions
 - **When reporting**, include OS, Python version, Chrome version, Stockfish version, and logs
-- **Releases** → [changelog](https://github.com/Ifaz2611/chess-X/releases)
 
 ---
 

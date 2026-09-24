@@ -33,7 +33,7 @@ def check_platform():
 def build_pyinstaller(onefile=True):
     # Ensure pyinstaller installed
     try:
-        import PyInstaller  # noqa
+        import PyInstaller  # type: ignore[import-not-found]  # noqa: F401
     except ImportError:
         print("PyInstaller not found, installing...")
         run([sys.executable, "-m", "pip", "install", "pyinstaller"])
@@ -43,7 +43,6 @@ def build_pyinstaller(onefile=True):
     else:
         cmd += ["--onedir"]
     cmd += ["--name", "chess-x", "--windowed", "chess-x.spec"]
-    # Also direct fallback if spec missing
     if not (ROOT / "chess-x.spec").exists():
         cmd = [sys.executable, "-m", "PyInstaller", "--onefile" if onefile else "--onedir",
                "--windowed", "--name", "chess-x",
@@ -54,9 +53,8 @@ def build_pyinstaller(onefile=True):
     print("PyInstaller build done. Output in dist/")
 
 def build_briefcase():
-    try:
-        import briefcase  # noqa
-    except ImportError:
+    import importlib.util
+    if importlib.util.find_spec("briefcase") is None:
         print("briefcase not found, installing...")
         run([sys.executable, "-m", "pip", "install", "briefcase"])
     run([sys.executable, "-m", "briefcase", "create"], cwd=str(ROOT))
@@ -77,7 +75,6 @@ def main():
     if args.briefcase:
         build_briefcase()
     if not (args.pyinstaller or args.briefcase or args.check):
-        print("No build flag given; --check done. Use --pyinstaller or --briefcase to build.")
-
+        print("No build flag given; --check done.")
 if __name__ == "__main__":
     main()
