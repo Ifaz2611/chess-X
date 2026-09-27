@@ -976,6 +976,7 @@ class StockfishBot(multiprocess.Process):
                 # Wait for opponent
                 previous_move_list = move_list.copy()
                 consecutive_errors = 0
+                consecutive_invalid = 0
                 while True:
                     if self._shutdown:
                         return
@@ -1080,12 +1081,30 @@ class StockfishBot(multiprocess.Process):
 
                     # Case 3: FEN mismatch when same move count but different moves (e.g., undo+ different line)
                     if len(new_move_list) == len(previous_move_list) and new_move_list != previous_move_list:
-                        logger.info("Move list changed without length increase – possible takeback with new move")
+                        # Validate BEFORE treating as takeback: a corrupt DOM
+                        # snapshot (phantom/variation node, same length) must not
+                        # trigger a GUI restart storm / hot spin. Just ignore it
+                        # and wait for the DOM to stabilize.
                         try:
                             from board_sync import BoardSync as _BSF
                             new_board = _BSF.create_board(variant=variant)
                             for san in new_move_list:
                                 new_board.push_san(san)
+                        except Exception as e:
+                            consecutive_invalid += 1
+                            # Rate-limit: log at most every ~25 hits, sleep to
+                            # avoid the 20/sec busy loop seen in the wild.
+                            try:
+                                _n = getattr(self, "_takeback_noise", 0) + 1
+                                self._takeback_noise = _n
+                            except Exception:
+                                _n = 1
+                            if _n == 1 or _n % 25 == 0:
+                                logger.warning("Ignoring corrupt same-length move snapshot %r (%s) [%d]", new_move_list, e, _n)
+                            time.sleep(0.15)
+                            continue
+                        try:
+                            self._takeback_noise = 0
                             board = new_board
                             stockfish.set_position([m.uci() for m in board.move_stack])
                             move_list = new_move_list
@@ -1097,6 +1116,8 @@ class StockfishBot(multiprocess.Process):
                             break
                         except Exception as e:
                             logger.debug("FEN mismatch handling error: %s", e)
+                            time.sleep(0.1)
+                            continue
 
                     # Normal: opponent made a move
                     if len(new_move_list) > len(previous_move_list):
@@ -1122,47 +1143,77 @@ class StockfishBot(multiprocess.Process):
                             tmp = _BSV.create_board(variant=variant)
                             for san in new_move_list:
                                 tmp.push_san(san)
+                            consecutive_invalid = 0
                             move_list = new_move_list
                             break
                         except Exception as e:
-                            logger.warning("Invalid SAN in new_move_list: %s %s", new_move_list, e)
-                            # Try to resync by pushing last move only
-                            move_list = new_move_list
-                            break
+                            # Corrupt snapshot (phantom node / mid-list dup as seen
+                            # in the wild: e6-after-e5, Re1-on-move-2, ...).
+                            # Do NOT accept it – keep the old move_list and keep
+                            # polling for the DOM to stabilize. Accepting it
+                            # poisons the board and deadlocks the bot ("stops").
+                            consecutive_invalid += 1
+                            if consecutive_invalid == 1 or consecutive_invalid % 10 == 0:
+                                logger.warning("Invalid SAN in new_move_list (ignored, kept %d moves): %s %s",
+                                               len(move_list), new_move_list, e)
+                            if consecutive_invalid >= 15:
+                                # DOM persistently corrupt – force grabber cache
+                                # reset so the next poll rebuilds from scratch.
+                                logger.warning("Move list corrupt %dx in a row – forcing grabber resync",
+                                               consecutive_invalid)
+                                try:
+                                    self.grabber.reset_moves_list()
+                                except Exception:
+                                    pass
+                                consecutive_invalid = 0
+                            time.sleep(0.15)
+                            continue
 
                     time.sleep(0.04)
 
-                # Apply opponent move to board
+                # New-game / takeback / same-length resync paths break out with
+                # the board already matching move_list (len <= previous len):
+                # nothing incremental to apply – go around the loop.
+                if len(move_list) <= len(previous_move_list):
+                    continue
+                # Apply only the NEW suffix moves (robust to multi-move jumps
+                # after lag), each validated individually.
                 try:
-                    move = move_list[-1]
-                    prev_board = board.copy()
-                    mover_is_white = (prev_board.turn == chess.WHITE)
-                    board.push_san(move)
-                    move_uci = prev_board.parse_san(move).uci()
-                    if prev_board.turn == chess.WHITE:
-                        white_moves.append(move_uci)
-                    else:
-                        black_moves.append(move_uci)
+                    new_suffix = move_list[len(previous_move_list):] if len(move_list) >= len(previous_move_list) else [move_list[-1]]
+                    if not new_suffix:
+                        continue
+                    last_mover_is_white = None
+                    for move in new_suffix:
+                        prev_board = board.copy()
+                        mover_is_white = (prev_board.turn == chess.WHITE)
+                        board.push_san(move)
+                        move_uci = prev_board.parse_san(move).uci()
+                        if prev_board.turn == chess.WHITE:
+                            white_moves.append(move_uci)
+                        else:
+                            black_moves.append(move_uci)
+                        last_mover_is_white = mover_is_white
+                        # Keep engine in step per move (cheap, keeps accuracy right)
+                        try:
+                            stockfish.make_moves_from_current_position([str(board.peek())])
+                        except Exception as e:
+                            logger.debug("make_moves_from_current_position (opponent) failed: %s", e)
+                            stockfish.set_position([m.uci() for m in board.move_stack])
+                        self._record_cp_loss(stockfish, mover_is_white)
                     try:
                         # FAST: 50ms is enough for accuracy tracking, avoids 300ms stall per opponent move
                         best_move = stockfish.get_best_move_time(50)
                     except Exception as e:
                         logger.debug("get_best_move_time failed: %s", e)
                         best_move = None
-                    if best_move:
-                        if prev_board.turn == chess.WHITE:
+                    if best_move and last_mover_is_white is not None:
+                        if last_mover_is_white:
                             white_best_moves.append(best_move)
                         else:
                             black_best_moves.append(best_move)
-                    try:
-                        stockfish.make_moves_from_current_position([str(board.peek())])
-                    except Exception as e:
-                        logger.debug("make_moves_from_current_position (opponent) failed: %s", e)
-                        stockfish.set_position([m.uci() for m in board.move_stack])
-                    # P1: record cp loss for opponent move
-                    self._record_cp_loss(stockfish, mover_is_white)
+                    # P1: record cp loss for opponent move (done per-move above)
                     self.send_eval_data(stockfish, board, white_moves, white_best_moves, black_moves, black_best_moves)
-                    self._safe_send(proto.MsgSingleMove(san=move))
+                    self._safe_send(proto.MsgSingleMove(san=new_suffix[-1]))
                 except Exception as e:
                     logger.warning("Failed to apply opponent move %s: %s", move_list[-1] if move_list else "?", e)
                     # Try FEN resync

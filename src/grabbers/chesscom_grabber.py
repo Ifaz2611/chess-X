@@ -91,6 +91,7 @@ class ChesscomGrabber(Grabber):
 
     def __init__(self, chrome_url, chrome_session_id, browser: str | None = None):
         super().__init__(chrome_url, chrome_session_id, browser=browser)
+        self._consecutive_bad_parses = 0
 
     def update_board_elem(self):
         """Resilient board lookup with WebDriverWait + fallback chain + retry on stale."""
@@ -309,6 +310,7 @@ class ChesscomGrabber(Grabber):
     def reset_moves_list(self):
         """Reset the moves list when a new game starts"""
         self.moves_list = {}
+        self._consecutive_bad_parses = 0
 
     def get_move_list(self):
         """Resilient move list scraping with stale retry + exponential backoff + fallback selectors."""
@@ -330,10 +332,11 @@ class ChesscomGrabber(Grabber):
                         global_nodes = self.chrome.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
                         if global_nodes:
                             logger.info("get_move_list: using global fallback, found %d nodes", len(global_nodes))
-                            # Process global nodes directly (no container)
-                            moves = [n for n in global_nodes if not self.moves_list or n.get_attribute("data-processed") is None]
-                            # Reuse same parsing loop but with global_nodes – simplify by treating global as container
-                            for move in moves:
+                            # Parse ALL nodes in DOM document order (no data-node
+                            # sort, no incremental data-processed filter – both
+                            # misorder/duplicate after re-renders).
+                            dom_sans = []
+                            for move in global_nodes:
                                 try:
                                     move_class = move.get_attribute("class") or ""
                                 except StaleElementReferenceException:
@@ -347,26 +350,22 @@ class ChesscomGrabber(Grabber):
                                     figure = None
                                 try:
                                     text = move.text.strip()
-                                    data_node = move.get_attribute("data-node")
                                 except StaleElementReferenceException:
                                     continue
-                                if not data_node:
+                                if text and self.normalize_result_text(text) is not None:
                                     continue
-                                if figure is None:
-                                    self.moves_list[data_node] = text
-                                elif "=" in text:
-                                    m = text + figure
-                                    if "+" in m:
-                                        m = m.replace("+", "")
-                                        m += "+"
-                                    self.moves_list[data_node] = m
-                                else:
-                                    self.moves_list[data_node] = figure + text
-                                try:
-                                    self.chrome.execute_script("arguments[0].setAttribute('data-processed', 'true')", move)
-                                except Exception:
-                                    pass
-                            return list(self.moves_list.values())
+                                san = self._decode_chesscom_san(figure, text)
+                                if san:
+                                    dom_sans.append(san)
+                            validated = self._validate_san_sequence(dom_sans)
+                            if validated is not None:
+                                self.moves_list = {str(i): s for i, s in enumerate(validated)}
+                                self._consecutive_bad_parses = 0
+                                return list(validated)
+                            # Corrupt global snapshot – keep last good cache
+                            if self.moves_list:
+                                return list(self.moves_list.values())
+                            return dom_sans
                         # No nodes found – if we have no cached moves, this is a new game with 0 moves (not error)
                         if not self.moves_list:
                             logger.debug("get_move_list: no container and no global nodes – returning [] (empty game)")
@@ -388,6 +387,9 @@ class ChesscomGrabber(Grabber):
                 # Handle new-game / takeback detection via visible_moves count.
                 # Takeback/undo: DOM node count decreases -> cached moves_list must
                 # be rebuilt from scratch, otherwise stale SANs linger.
+                # NOTE: count comparison uses raw DOM node count (document order),
+                # not the validated cache length, so transient phantom nodes
+                # don't corrupt the comparison.
                 try:
                     visible_moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
                 except StaleElementReferenceException:
@@ -397,12 +399,14 @@ class ChesscomGrabber(Grabber):
                 if len(visible_moves) == 0 and self.moves_list:
                     logger.info("Detected new game (visible_moves==0 but cached moves exist) – resetting")
                     self.reset_moves_list()
+                    self._consecutive_bad_parses = 0
                 elif self.moves_list and len(visible_moves) < len(self.moves_list):
                     logger.info(
                         "Takeback/undo detected on chess.com: visible %d < cached %d – rebuilding",
                         len(visible_moves), len(self.moves_list),
                     )
                     self.reset_moves_list()
+                    self._consecutive_bad_parses = 0
                     # Clear data-processed marks so full re-parse happens below
                     try:
                         self.chrome.execute_script(
@@ -413,19 +417,18 @@ class ChesscomGrabber(Grabber):
                     except Exception:
                         pass
 
-                # Determine which nodes to fetch
+                # Always re-parse ALL visible nodes in DOM document order.
+                # data-node is a tree/variation id, NOT a stable ply index, so
+                # sorting by it misorders moves after ~10 plies (bot freeze).
+                # data-processed incremental caching is therefore unreliable
+                # (chess.com re-renders the list); full re-parse is cheap (<40 nodes).
                 try:
-                    if not self.moves_list:
-                        moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
-                    else:
-                        moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]:not([data-processed])")
+                    moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
                 except StaleElementReferenceException:
                     time.sleep(0.05)
-                    if not self.moves_list:
-                        moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
-                    else:
-                        moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]:not([data-processed])")
+                    moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
 
+                dom_sans: list[str] = []
                 for move in moves:
                     try:
                         move_class = move.get_attribute("class") or ""
@@ -445,39 +448,63 @@ class ChesscomGrabber(Grabber):
 
                     try:
                         text = move.text.strip()
-                        data_node = move.get_attribute("data-node")
                     except StaleElementReferenceException:
                         continue
 
-                    # Skip if no data-node (should not happen)
-                    if not data_node:
-                        continue
                     # Skip result markers (1-0, 0-1, 1/2-1/2, *) – they are not SAN
                     if text and self.normalize_result_text(text) is not None:
                         logger.debug("Skipping result marker in move list: %r", text)
-                        try:
-                            self.chrome.execute_script("arguments[0].setAttribute('data-processed', 'true')", move)
-                        except Exception:
-                            pass
                         continue
 
-                    if figure is None:
-                        self.moves_list[data_node] = text
-                    elif "=" in text:
-                        m = text + figure
-                        if "+" in m:
-                            m = m.replace("+", "")
-                            m += "+"
-                        self.moves_list[data_node] = m
-                    else:
-                        self.moves_list[data_node] = figure + text
+                    san = self._decode_chesscom_san(figure, text)
+                    if not san:
+                        continue
+                    dom_sans.append(san)
 
-                    try:
-                        self.chrome.execute_script("arguments[0].setAttribute('data-processed', 'true')", move)
-                    except (StaleElementReferenceException, WebDriverException):
-                        pass
+                # Validate the DOM-order sequence before accepting it. A single
+                # phantom/variation node (e.g. 'Re1' on move 2, or a duplicated
+                # 'b4'/'exd4' mid-list) must NOT poison the cache – otherwise the
+                # bot loop spins on "Invalid SAN" forever and appears frozen.
+                validated = self._validate_san_sequence(dom_sans)
+                if validated is None:
+                    # Empty DOM = genuine new game (0 moves), not corruption.
+                    if len(dom_sans) == 0:
+                        self.moves_list = {}
+                        self._consecutive_bad_parses = 0
+                        return []
+                    # Corrupt snapshot (transient re-render / variation nodes):
+                    # keep returning the last known-good list so the bot waits
+                    # for the DOM to stabilize instead of deadlocking.
+                    self._consecutive_bad_parses = getattr(self, "_consecutive_bad_parses", 0) + 1
+                    logger.warning(
+                        "Rejecting corrupt chess.com move snapshot %r (kept %d cached moves, bad streak %d)",
+                        dom_sans, len(self.moves_list), self._consecutive_bad_parses,
+                    )
+                    if self._consecutive_bad_parses >= 10:
+                        # DOM stuck corrupt (e.g. persistent variation nodes):
+                        # force a full reset so the next poll rebuilds cleanly.
+                        logger.warning("Move snapshot corrupt 10x in a row – forcing cache reset")
+                        self.reset_moves_list()
+                        self._consecutive_bad_parses = 0
+                    if self.moves_list:
+                        return list(self.moves_list.values())
+                    # No good cache yet – return the raw snapshot so the caller
+                    # can surface the error instead of None-looping.
+                    return dom_sans
 
-                return self._sorted_chesscom_moves()
+                self._consecutive_bad_parses = 0
+                # Rebuild cache in DOM order (keys are positional, not data-node,
+                # so future reads stay stable even if chess.com recycles ids).
+                self.moves_list = {str(i): san for i, san in enumerate(validated)}
+                try:
+                    for m in moves:
+                        self.chrome.execute_script("arguments[0].setAttribute('data-processed', 'true')", m)
+                except (StaleElementReferenceException, WebDriverException):
+                    pass
+                except Exception:
+                    pass
+
+                return list(validated)
 
             except StaleElementReferenceException as e:
                 logger.debug("get_move_list stale retry %d: %s", attempt, e)
@@ -491,26 +518,104 @@ class ChesscomGrabber(Grabber):
                 continue
         return list(self.moves_list.values()) if self.moves_list else None
 
-    def _sorted_chesscom_moves(self) -> list:
-        """Return cached moves ordered by data-node ply (numeric when possible).
+    @staticmethod
+    def _decode_chesscom_san(figure, text) -> str | None:
+        """Combine chess.com figurine icon + node text into a SAN string.
 
-        data-node values are ply indices; lexical sort would misorder >=10,
-        so sort numerically with lexical fallback.
+        data-figurine may be a single letter ('n'), a full name ('knight'),
+        or a unicode glyph ('♞'). Node text may already contain the piece
+        letter – avoid double-prefixing ('NNf3'). Promotion chooser nodes
+        ('=Q' fragments) are normalized to trailing '=Q[+#]' form.
+        Returns None for empty/non-move text.
+        """
+        t = (text or "").strip()
+        if not t:
+            return None
+        # Strip move-number prefixes like "12." / "12..." that sometimes leak in
+        import re as _re
+        t = _re.sub(r"^\d+\.+\s*", "", t).strip()
+        if not t or t in ("…", "...", "·"):
+            return None
+        if figure is None:
+            return t
+        f = str(figure).strip()
+        if not f:
+            return t
+        # Normalize figure to a SAN piece letter ("" for pawn)
+        piece = ""
+        fl = f.lower()
+        glyph_map = {"♞": "N", "♘": "N", "♜": "R", "♖": "R", "♝": "B", "♗": "B",
+                     "♛": "Q", "♕": "Q", "♚": "K", "♔": "K", "♟": "", "♙": ""}
+        if f in glyph_map:
+            piece = glyph_map[f]
+        elif len(f) == 1 and f.upper() in "KQRBN":
+            # Single letter; 'P'/pawn marker means no prefix
+            piece = "" if f.upper() == "P" else f.upper()
+        else:
+            name_map = {"king": "K", "queen": "Q", "rook": "R", "bishop": "B",
+                        "knight": "N", "pawn": "", "k": "K", "q": "Q",
+                        "r": "R", "b": "B", "n": "N"}
+            piece = name_map.get(fl, "")
+            if piece == "" and fl not in ("pawn", "p", ""):
+                # Unknown figure value – don't corrupt the SAN, use raw text
+                # (but avoid returning e.g. "knightf3").
+                if len(t) > 1 and t[0].upper() in "KQRBN" and t[0].isupper():
+                    return t
+                return t
+        # Promotion: text like "e8", "=Q", "e8=Q", "e8Q" + figure
+        if "=" in t:
+            # Normalize to trailing =Piece (e.g. "e8=Q", "exd8=Q+")
+            core = t.replace(" ", "")
+            # If figure already present after '=', keep as-is
+            if _re.search(r"=[QRBNqrbn][+#]?$", core):
+                return core
+            # Text fragment like "=Q" or "e8=" – append normalized piece
+            promo = piece if piece in "QRBN" else "Q"
+            core = _re.sub(r"=?\s*[QRBNqrbn]?\s*[+#]?\s*$", "", core)
+            suffix = "+" if "+" in t else ("#" if "#" in t else "")
+            return f"{core}={promo}{suffix}"
+        # Avoid double piece prefix: text "Nf3" + figure "N" -> "Nf3"
+        if piece and t and t[0].upper() == piece and t[0].isupper():
+            return t
+        # Castling stays as-is regardless of figure
+        if t.startswith("O-O") or t.startswith("0-0"):
+            return t.replace("0-0", "O-O")
+        if piece:
+            return piece + t
+        # Pawn moves: strip any stray figurine letter remnants
+        return t
+
+    @staticmethod
+    def _validate_san_sequence(sans) -> list | None:
+        """Validate SANs sequentially on a fresh board (DOM order).
+
+        Returns the validated list when the FULL sequence is legal,
+        [] for an empty game, or None when any move is illegal (corrupt
+        snapshot – caller must keep the last good cache, not poison it).
         """
         try:
-            def _key(k):
-                try:
-                    return (0, int(str(k).strip()))
-                except (ValueError, TypeError):
-                    return (1, str(k))
-            ordered = sorted(self.moves_list.items(), key=lambda kv: _key(kv[0]))
-            # Rebuild dict in order to keep future list() stable
-            self.moves_list = dict(ordered)
-            sans = [v for _, v in ordered]
-            # Defensive: strip any result marker that slipped through
+            import chess as _chess
+        except Exception:
+            return list(sans) if sans else []
+        if not sans:
+            return []
+        try:
+            b = _chess.Board()
+            for san in sans:
+                b.push_san(san)
+            return list(sans)
+        except Exception:
+            return None
+
+    def _sorted_chesscom_moves(self) -> list:
+        """Legacy helper kept for backwards compat: return cached moves.
+
+        Ordering is now DOM document order (positional keys), NOT data-node
+        sort – data-node ids are variation/tree ids that misorder the game.
+        """
+        try:
+            sans = list(self.moves_list.values())
             cleaned = [s for s in sans if self.normalize_result_text(s) is None]
-            if len(cleaned) != len(sans):
-                logger.debug("Filtered %d result marker(s) from move list", len(sans) - len(cleaned))
             return cleaned
         except Exception:
             return list(self.moves_list.values())
