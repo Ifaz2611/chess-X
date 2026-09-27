@@ -27,8 +27,9 @@ class LichessGrabber(Grabber):
         (By.XPATH, '//*[@id="main-wrap"]/main/div[1]/rm6/l4x'),
         (By.CSS_SELECTOR, ".mselect + rm6 l4x"),
         (By.CSS_SELECTOR, "l4x"),
-        # Fallbacks for obfuscated builds (tags like aPp, i5d, Z7yx etc. change each deploy)
-        # These try to locate the moves container via the stable active class .a1t
+
+
+
         (By.CSS_SELECTOR, ".a1t"),
     ]
 
@@ -114,14 +115,21 @@ class LichessGrabber(Grabber):
                     return False
                 except NoSuchElementException:
                     pass
-                # Additional fallback: result banner
+                # Additional fallback: result banner (draw / resign / abort aware)
                 try:
                     banner = self.chrome.find_element(By.CSS_SELECTOR, ".result, .status, #promotion_choice")
                     if banner and banner.is_displayed():
                         text = banner.text or ""
-                        if any(x in text for x in ["1-0", "0-1", "1/2-1/2", "Checkmate", "Draw"]):
+                        if self.text_looks_like_game_end(text):
                             return True
                 except NoSuchElementException:
+                    pass
+                # Page-text fallback for resign/draw/timeout banners
+                try:
+                    page = self.get_page_text(limit=3000)
+                    if page and self.normalize_result_text(page) is not None:
+                        return True
+                except Exception:
                     pass
                 return False
             except StaleElementReferenceException:
@@ -130,6 +138,47 @@ class LichessGrabber(Grabber):
             except WebDriverException as e:
                 logger.debug("is_game_over error: %s", e)
                 return False
+        return False
+
+    def _result_banner_texts(self) -> list:
+        texts = []
+        for sel in [(By.CSS_SELECTOR, ".result"), (By.CSS_SELECTOR, ".status"),
+                    (By.CSS_SELECTOR, ".result-wrap"), (By.CSS_SELECTOR, "#promotion_choice")]:
+            try:
+                by, val = sel
+                el = self.chrome.find_element(by, val)
+                if el is not None and (el.text or "").strip():
+                    texts.append(el.text.strip())
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                continue
+        return texts
+
+    def has_draw_offer(self) -> bool:
+        for by, val in [
+            (By.XPATH, "//button[contains(., 'Draw')]"),
+            (By.CSS_SELECTOR, "button.draw-yes"),
+            (By.XPATH, "//button[contains(@class,'draw')]"),
+        ]:
+            try:
+                el = self.chrome.find_element(by, val)
+                if el is not None and el.is_displayed():
+                    return True
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                continue
+        return False
+
+    def has_resign_button(self) -> bool:
+        for by, val in [
+            (By.XPATH, "//button[contains(., 'Resign')]"),
+            (By.XPATH, "//button[contains(., 'Abort')]"),
+            (By.CSS_SELECTOR, "button.resign"),
+        ]:
+            try:
+                el = self.chrome.find_element(by, val)
+                if el is not None and el.is_displayed():
+                    return True
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                continue
         return False
 
     def set_moves_tag_name(self):
@@ -148,7 +197,8 @@ class LichessGrabber(Grabber):
                 continue
         return False
 
-    # --- JS helpers for obfuscated Lichess tags (rm6/l4x/kwdb are randomized each build) ---
+
+
     def _js_extract_moves(self):
         """Try to extract SAN list via JavaScript, independent of obfuscated tag names.
         Uses stable .a1t (active move) class + SAN regex scan. Returns list or None."""
@@ -244,21 +294,32 @@ class LichessGrabber(Grabber):
                 s = s.strip()
                 if not s or s in ("…", "..."):
                     continue
-                # strip leading move numbers if any slipped through
+
+
+
+                if self.normalize_result_text(s) is not None:
+                    continue
+
+
+
                 if re.match(r"^[0-9]+\.?$", s):
                     continue
-                # re.sub to keep only SAN chars
+
+
                 cs = re.sub(r"[^a-zA-Z0-9xO#+=\\-]", "", s)
-                # fallback: if original had unicode, cs may be valid
-                # validate with SAN-ish pattern
+
+
+
                 if re.match(r"^(?:[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|O-O(?:-O)?[+#]?)$", s) or re.match(r"^(?:[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|O-O(?:-O)?[+#]?)$", cs):
-                    # prefer s if it already matches, else cs
+
+
                     if re.match(r"^(?:[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|O-O(?:-O)?[+#]?)$", s):
                         cleaned.append(s)
                     else:
                         cleaned.append(cs)
                 elif s:
-                    # keep as is if looks like SAN
+
+
                     cleaned.append(s)
             return cleaned
         except Exception as e:
@@ -266,17 +327,18 @@ class LichessGrabber(Grabber):
             return None
 
     def get_move_list(self):
-        # First: try robust JS extraction (handles obfuscated tags)
-        # This is the primary path for live games – works regardless of rm6/l4x randomization
+
+
+
+
         for attempt in range(2):
             try:
                 if not self.is_game_puzzles():
                     js_moves = self._js_extract_moves()
                     if js_moves is not None:
-                        # js_moves could be [] for new game (0 moves) – that's valid, don't treat as failure
-                        # Sync with moves_list cache for compatibility with incremental logic
-                        # If we got a valid list (empty or not), return it and keep cache in sync
-                        # For non-empty, rebuild moves_list to reflect current board
+
+
+
                         self.moves_list = {str(i): san for i, san in enumerate(js_moves)}
                         return js_moves
             except Exception as e:
@@ -300,21 +362,25 @@ class LichessGrabber(Grabber):
                         if attempt < 2:
                             time.sleep(0.06 * (2 ** attempt))
                             continue
-                        # Last chance: JS already tried, but try one more direct JS before failing
+
+
                         js_fallback = self._js_extract_moves()
                         if js_fallback is not None:
                             self.moves_list = {str(i): san for i, san in enumerate(js_fallback)}
                             return js_fallback
                         return None
                     if (not move_list_elem) or (self.tag_name is None and self.set_moves_tag_name() is False):
-                        # If set_moves_tag_name failed, try JS fallback before returning empty
+
+
                         js_fallback = self._js_extract_moves()
                         if js_fallback is not None:
                             self.moves_list = {str(i): san for i, san in enumerate(js_fallback)}
                             return js_fallback
                         return []
 
-                # Get move elements
+
+
+
                 try:
                     if not is_puzzles:
                         if not self.moves_list:
@@ -347,7 +413,8 @@ class LichessGrabber(Grabber):
                         continue
                     if move != "":
                         try:
-                            # Use element id or data-node or index as key
+
+
                             key = getattr(move_element, "id", None) or move_element.get_attribute("data-node") or str(id(move_element))
                         except StaleElementReferenceException:
                             key = str(id(move_element))
@@ -382,12 +449,15 @@ class LichessGrabber(Grabber):
         return None
 
     def get_normal_move_list_elem(self):
-        # Try primary selectors (including .a1t which may return active move, not container)
+
+
+
         for by, val in self.MOVE_LIST_SELECTORS:
             try:
                 elem = self.chrome.find_element(by, val)
                 if elem:
-                    # If we matched .a1t (active move), return its parent (the moves container)
+
+
                     try:
                         if val == ".a1t" or ".a1t" in val:
                             parent = self.chrome.execute_script("return arguments[0].parentElement", elem)
@@ -395,8 +465,9 @@ class LichessGrabber(Grabber):
                                 return parent
                     except Exception:
                         pass
-                    # If element is the move itself (kwdb/move etc.), check if it has siblings that look like moves -> return parent
-                    # Heuristic: if element.tagName matches move-like and it has siblings, use parent
+
+
+
                     try:
                         tag = (elem.tag_name or "").lower()
                         if tag in ("move", "kwdb", "z7yx") or len(tag) <= 4:
@@ -408,7 +479,8 @@ class LichessGrabber(Grabber):
                     return elem
             except NoSuchElementException:
                 continue
-        # JS fallback: find container via .a1t or scan
+
+
         try:
             container = self.chrome.execute_script("""
                 const active = document.querySelector('.a1t');
@@ -439,7 +511,9 @@ class LichessGrabber(Grabber):
         except Exception as e:
             logger.debug("get_normal_move_list_elem JS fallback failed: %s", e)
 
-        # Check for empty board case: rm6 / i5d exists but no moves yet -> return [] (not None)
+
+
+
         for empty_sel in [(By.CSS_SELECTOR, "rm6"), (By.CSS_SELECTOR, "i5d"), (By.CSS_SELECTOR, "rm6, i5d")]:
             try:
                 by, val = empty_sel
@@ -491,9 +565,11 @@ class LichessGrabber(Grabber):
                 if btn and btn.is_displayed():
                     self.chrome.execute_script("arguments[0].click();", btn)
                     logger.info("Clicked puzzle next: %s=%s", by, val)
-                    return
+                    self.reset_moves_list()
+                    return True
             except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
                 continue
+        return False
 
     def click_game_next(self):
         selectors = [
@@ -501,6 +577,8 @@ class LichessGrabber(Grabber):
             (By.CSS_SELECTOR, "button.new-opponent"),
             (By.XPATH, "//button[contains(., 'New opponent')]"),
             (By.CSS_SELECTOR, "a.new-opponent"),
+            (By.XPATH, "//button[contains(., 'Rematch')]"),
+            (By.XPATH, "//a[contains(., 'Rematch')]"),
         ]
         for by, val in selectors:
             try:
@@ -508,10 +586,12 @@ class LichessGrabber(Grabber):
                 if btn and btn.is_displayed():
                     self.chrome.execute_script("arguments[0].click();", btn)
                     logger.info("Clicked new opponent: %s=%s", by, val)
-                    return
+                    self.reset_moves_list()
+                    return True
             except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
                 continue
         logger.debug("click_game_next: no button found")
+        return False
 
     def make_mouseless_move(self, move, move_count):
         for attempt in range(2):

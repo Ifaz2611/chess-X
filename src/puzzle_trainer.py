@@ -1,14 +1,6 @@
-"""Puzzle trainer – hints and solution reveal only after attempt (Phase5 stub).
-
-In full implementation this would integrate with Lichess puzzle API or local
-PGN puzzles, show hint arrow, and reveal solution after user attempt.
-Currently provides Trainer class for future GUI integration.
-"""
 from __future__ import annotations
-
 import chess
 from utilities import get_logger
-
 logger = get_logger("puzzle_trainer")
 
 

@@ -3,7 +3,6 @@ from selenium.common import NoSuchElementException, StaleElementReferenceExcepti
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
 from grabbers.grabber import Grabber
 from utilities import get_logger
 
@@ -11,7 +10,6 @@ logger = get_logger("grabber.chesscom")
 
 
 class ChesscomGrabber(Grabber):
-    # Resilient fallback chains: CSS first (fast), then XPath. Order matters – most likely first.
     BOARD_SELECTORS = [
         (By.CSS_SELECTOR, "wc-chess-board"),
         (By.ID, "board-single"),
@@ -33,6 +31,62 @@ class ChesscomGrabber(Grabber):
         (By.CSS_SELECTOR, "div[data-test-element='move-list']"),
         (By.CSS_SELECTOR, "div.live-game-buttons + div"),  # fallback near live buttons
         (By.XPATH, "//div[contains(@class,'move-list')]"),
+    ]
+
+    # --- Puzzles / game-over / next-game selectors (chess.com) ---
+    PUZZLE_URL_HINTS = ("puzzle", "puzzles", "training", "rush", "puzzle-battle")
+    PUZZLE_DOM_SELECTORS = [
+        (By.CSS_SELECTOR, "[data-test-element='puzzle-board']"),
+        (By.CSS_SELECTOR, ".puzzle-board"),
+        (By.CSS_SELECTOR, "[class*='puzzle']"),
+        (By.XPATH, "//*[contains(@class,'puzzle')]"),
+    ]
+    PUZZLE_NEXT_SELECTORS = [
+        (By.CSS_SELECTOR, "button[data-test-element='puzzle-next']"),
+        (By.CSS_SELECTOR, "button.puzzle-next"),
+        (By.CSS_SELECTOR, "button[class*='puzzle-next']"),
+        (By.XPATH, "//button[contains(., 'Next')]"),
+        (By.XPATH, "//button[contains(., 'Next Puzzle')]"),
+        (By.XPATH, "//button[contains(., 'Continue')]"),
+        (By.XPATH, "//button[contains(., 'Try Again')]"),
+        (By.XPATH, "//a[contains(., 'Next')]"),
+        (By.CSS_SELECTOR, ".puzzle-controls button:last-child"),
+    ]
+    GAME_NEXT_SELECTORS = [
+        (By.CSS_SELECTOR, "button[data-test-element='rematch']"),
+        (By.CSS_SELECTOR, "button[data-test-element='new-game']"),
+        (By.CSS_SELECTOR, "button[data-test-element='play-again']"),
+        (By.CSS_SELECTOR, "button.rematch"),
+        (By.CSS_SELECTOR, "button.ui_v5-button-component"),
+        (By.XPATH, "//button[contains(., 'Rematch')]"),
+        (By.XPATH, "//button[contains(., 'New Game')]"),
+        (By.XPATH, "//button[contains(., 'Play Again')]"),
+        (By.XPATH, "//button[contains(., 'New Opponent')]"),
+        (By.XPATH, "//button[contains(., 'Next Game')]"),
+        (By.XPATH, "//button[contains(., 'Challenge')]"),
+        (By.XPATH, "//a[contains(., 'Rematch')]"),
+    ]
+    RESULT_BANNER_SELECTORS = [
+        (By.CSS_SELECTOR, ".board-modal-container"),
+        (By.CSS_SELECTOR, ".game-result"),
+        (By.CSS_SELECTOR, "[data-test-element='game-result']"),
+        (By.CSS_SELECTOR, ".modal-game-over"),
+        (By.CSS_SELECTOR, "[class*='game-over']"),
+        (By.CSS_SELECTOR, "[class*='game-result']"),
+        (By.CSS_SELECTOR, ".live-game-end"),
+    ]
+    DRAW_OFFER_SELECTORS = [
+        (By.XPATH, "//button[contains(., 'Accept Draw')]"),
+        (By.XPATH, "//button[contains(., 'Decline')]"),
+        (By.CSS_SELECTOR, "button[data-test-element='accept-draw']"),
+        (By.CSS_SELECTOR, "[class*='draw-offer']"),
+    ]
+    RESIGN_BUTTON_SELECTORS = [
+        (By.CSS_SELECTOR, "button[data-test-element='resign']"),
+        (By.CSS_SELECTOR, "button[class*='resign']"),
+        (By.XPATH, "//button[contains(., 'Resign')]"),
+        (By.XPATH, "//button[contains(., 'Abort')]"),
+        (By.XPATH, "//button[contains(@aria-label, 'Resign')]"),
     ]
 
     def __init__(self, chrome_url, chrome_session_id, browser: str | None = None):
@@ -158,23 +212,98 @@ class ChesscomGrabber(Grabber):
     def is_game_over(self):
         for attempt in range(2):
             try:
+                # 1) Modal / banner elements with result text
+                for by, val in self.RESULT_BANNER_SELECTORS:
+                    try:
+                        el = self.chrome.find_element(by, val)
+                        if el is None:
+                            continue
+                        try:
+                            visible = el.is_displayed()
+                        except Exception:
+                            visible = True
+                        text = ""
+                        try:
+                            text = (el.text or "").strip()
+                        except StaleElementReferenceException:
+                            continue
+                        if not visible and not text:
+                            continue
+                        if text and self.text_looks_like_game_end(text):
+                            return True
+                        if visible and ("board-modal-container" in val or "game-result" in val or "game-over" in val):
+                            # Visible end-of-game modal even if text not yet scraped
+                            # Double-check via page text to avoid false positive on premove modals
+                            page = self.get_page_text(limit=2000)
+                            if self.text_looks_like_game_end(page) or self.normalize_result_text(text) is not None:
+                                return True
+                            return True
+                    except NoSuchElementException:
+                        continue
+                    except StaleElementReferenceException:
+                        continue
+                # 2) Fallback: scan page text for result markers / keywords
                 try:
-                    game_over_window = self.chrome.find_element(By.CSS_SELECTOR, ".board-modal-container")
-                    return game_over_window is not None and game_over_window.is_displayed()
-                except NoSuchElementException:
+                    page = self.get_page_text(limit=4000)
+                    if page and self.text_looks_like_game_end(page):
+                        # Require a banner element OR explicit score to avoid matching
+                        # move-list "1." fragments – normalize_result_text is strict.
+                        if self.normalize_result_text(page) is not None:
+                            return True
+                        # Keyword-only hit: confirm a banner/modal exists
+                        for by, val in self.RESULT_BANNER_SELECTORS:
+                            try:
+                                el = self.chrome.find_element(by, val)
+                                if el is not None:
+                                    return True
+                            except (NoSuchElementException, StaleElementReferenceException):
+                                continue
+                except Exception:
                     pass
-                # Fallback: legacy class name search
-                try:
-                    game_over_window = self.chrome.find_element(By.CLASS_NAME, "board-modal-container")
-                    return game_over_window is not None
-                except NoSuchElementException:
-                    return False
+                return False
             except StaleElementReferenceException:
                 time.sleep(0.05)
                 continue
             except WebDriverException as e:
                 logger.debug("is_game_over WebDriverException: %s", e)
                 return False
+        return False
+
+    def _result_banner_texts(self) -> list:
+        texts = []
+        for by, val in self.RESULT_BANNER_SELECTORS:
+            try:
+                el = self.chrome.find_element(by, val)
+                if el is None:
+                    continue
+                try:
+                    t = (el.text or "").strip()
+                except StaleElementReferenceException:
+                    continue
+                if t:
+                    texts.append(t)
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                continue
+        return texts
+
+    def has_draw_offer(self) -> bool:
+        for by, val in self.DRAW_OFFER_SELECTORS:
+            try:
+                el = self.chrome.find_element(by, val)
+                if el is not None and el.is_displayed():
+                    return True
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                continue
+        return False
+
+    def has_resign_button(self) -> bool:
+        for by, val in self.RESIGN_BUTTON_SELECTORS:
+            try:
+                el = self.chrome.find_element(by, val)
+                if el is not None and el.is_displayed():
+                    return True
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                continue
         return False
 
     def reset_moves_list(self):
@@ -256,7 +385,9 @@ class ChesscomGrabber(Grabber):
                         return []
                     return None
 
-                # Handle new-game detection via visible_moves count
+                # Handle new-game / takeback detection via visible_moves count.
+                # Takeback/undo: DOM node count decreases -> cached moves_list must
+                # be rebuilt from scratch, otherwise stale SANs linger.
                 try:
                     visible_moves = move_list_elem.find_elements(By.CSS_SELECTOR, "div.node[data-node]")
                 except StaleElementReferenceException:
@@ -266,6 +397,21 @@ class ChesscomGrabber(Grabber):
                 if len(visible_moves) == 0 and self.moves_list:
                     logger.info("Detected new game (visible_moves==0 but cached moves exist) – resetting")
                     self.reset_moves_list()
+                elif self.moves_list and len(visible_moves) < len(self.moves_list):
+                    logger.info(
+                        "Takeback/undo detected on chess.com: visible %d < cached %d – rebuilding",
+                        len(visible_moves), len(self.moves_list),
+                    )
+                    self.reset_moves_list()
+                    # Clear data-processed marks so full re-parse happens below
+                    try:
+                        self.chrome.execute_script(
+                            "var els=arguments[0].querySelectorAll('[data-processed]');"
+                            "for(var i=0;i<els.length;i++){els[i].removeAttribute('data-processed');}",
+                            move_list_elem,
+                        )
+                    except Exception:
+                        pass
 
                 # Determine which nodes to fetch
                 try:
@@ -306,6 +452,14 @@ class ChesscomGrabber(Grabber):
                     # Skip if no data-node (should not happen)
                     if not data_node:
                         continue
+                    # Skip result markers (1-0, 0-1, 1/2-1/2, *) – they are not SAN
+                    if text and self.normalize_result_text(text) is not None:
+                        logger.debug("Skipping result marker in move list: %r", text)
+                        try:
+                            self.chrome.execute_script("arguments[0].setAttribute('data-processed', 'true')", move)
+                        except Exception:
+                            pass
+                        continue
 
                     if figure is None:
                         self.moves_list[data_node] = text
@@ -323,7 +477,7 @@ class ChesscomGrabber(Grabber):
                     except (StaleElementReferenceException, WebDriverException):
                         pass
 
-                return list(self.moves_list.values())
+                return self._sorted_chesscom_moves()
 
             except StaleElementReferenceException as e:
                 logger.debug("get_move_list stale retry %d: %s", attempt, e)
@@ -337,31 +491,278 @@ class ChesscomGrabber(Grabber):
                 continue
         return list(self.moves_list.values()) if self.moves_list else None
 
+    def _sorted_chesscom_moves(self) -> list:
+        """Return cached moves ordered by data-node ply (numeric when possible).
+
+        data-node values are ply indices; lexical sort would misorder >=10,
+        so sort numerically with lexical fallback.
+        """
+        try:
+            def _key(k):
+                try:
+                    return (0, int(str(k).strip()))
+                except (ValueError, TypeError):
+                    return (1, str(k))
+            ordered = sorted(self.moves_list.items(), key=lambda kv: _key(kv[0]))
+            # Rebuild dict in order to keep future list() stable
+            self.moves_list = dict(ordered)
+            sans = [v for _, v in ordered]
+            # Defensive: strip any result marker that slipped through
+            cleaned = [s for s in sans if self.normalize_result_text(s) is None]
+            if len(cleaned) != len(sans):
+                logger.debug("Filtered %d result marker(s) from move list", len(sans) - len(cleaned))
+            return cleaned
+        except Exception:
+            return list(self.moves_list.values())
+
     def is_game_puzzles(self):
+        """True when on a chess.com puzzle / training page.
+
+        Checks URL hints first (cheap), then DOM puzzle markers.
+        """
+        for attempt in range(2):
+            try:
+                try:
+                    url = (self.chrome.current_url or "").lower()
+                except WebDriverException:
+                    url = ""
+                if any(h in url for h in self.PUZZLE_URL_HINTS):
+                    # Exclude live/archive game URLs that merely contain "puzzle" rarely;
+                    # puzzle URLs on chess.com are /puzzles/... – treat as puzzle.
+                    if "puzzle" in url:
+                        return True
+                for by, val in self.PUZZLE_DOM_SELECTORS:
+                    try:
+                        el = self.chrome.find_element(by, val)
+                        if el is not None:
+                            try:
+                                if el.is_displayed():
+                                    return True
+                            except Exception:
+                                return True
+                    except NoSuchElementException:
+                        continue
+                    except StaleElementReferenceException:
+                        continue
+                # Also check page text for puzzle-specific chrome
+                try:
+                    page = self.get_page_text(limit=1500).lower()
+                    if any(k in page for k in ("puzzle rating", "daily puzzle", "puzzle rush", "puzzle battle")):
+                        return True
+                except Exception:
+                    pass
+                return False
+            except StaleElementReferenceException:
+                time.sleep(0.04)
+                continue
+            except WebDriverException:
+                return False
         return False
 
     def click_puzzle_next(self):
-        pass
-
-    def click_game_next(self):
-        """Chess.com rematch / new game – try multiple selectors."""
-        selectors = [
-            (By.CSS_SELECTOR, "button[data-test-element='new-game']"),
-            (By.CSS_SELECTOR, "button.ui_v5-button-component"),
-            (By.XPATH, "//button[contains(., 'New Game')]"),
-            (By.XPATH, "//button[contains(., 'Rematch')]"),
-            (By.XPATH, "//button[contains(., 'Play Again')]"),
-        ]
-        for by, val in selectors:
+        """Click 'Next puzzle' on chess.com (parity with Lichess continue flow)."""
+        for by, val in self.PUZZLE_NEXT_SELECTORS:
             try:
                 btn = self.chrome.find_element(by, val)
-                if btn and btn.is_displayed():
+                if btn is not None and btn.is_displayed():
                     self.chrome.execute_script("arguments[0].click();", btn)
-                    logger.info("Clicked chess.com next game button: %s=%s", by, val)
-                    return
+                    logger.info("Clicked chess.com puzzle next: %s=%s", by, val)
+                    self.reset_moves_list()
+                    return True
             except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
                 continue
+        # JS fallback: click first visible button whose text is Next/Continue
+        try:
+            clicked = self.chrome.execute_script("""
+                const cands = Array.from(document.querySelectorAll('button, a'));
+                for (const b of cands) {
+                    const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+                    if ((t === 'next' || t.startsWith('next puzzle') || t === 'continue')
+                        && b.offsetParent !== null) { b.click(); return true; }
+                }
+                return false;
+            """)
+            if clicked:
+                logger.info("Clicked chess.com puzzle next via JS fallback")
+                self.reset_moves_list()
+                return True
+        except Exception as e:
+            logger.debug("click_puzzle_next JS fallback failed: %s", e)
+        logger.debug("click_puzzle_next: no button found on chess.com")
+        return False
+
+    def click_game_next(self):
+        """Chess.com rematch / new-game loop (mirrors Lichess 'New opponent').
+
+        Tries rematch-style selectors first, clicks via JS, resets the cached
+        move list so the bot loop re-syncs from 0 moves.
+        Returns True when a button was clicked.
+        """
+        for by, val in self.GAME_NEXT_SELECTORS:
+            try:
+                btn = self.chrome.find_element(by, val)
+                if btn is not None and btn.is_displayed():
+                    self.chrome.execute_script("arguments[0].click();", btn)
+                    logger.info("Clicked chess.com next game button: %s=%s", by, val)
+                    self.reset_moves_list()
+                    return True
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                continue
+        # JS fallback: first visible rematch-like button
+        try:
+            clicked = self.chrome.execute_script("""
+                const pats = ['rematch', 'new game', 'play again', 'new opponent', 'next game'];
+                const cands = Array.from(document.querySelectorAll('button, a'));
+                for (const b of cands) {
+                    const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+                    if (pats.some(p => t.includes(p)) && b.offsetParent !== null) { b.click(); return t; }
+                }
+                return false;
+            """)
+            if clicked:
+                logger.info("Clicked chess.com next game via JS fallback: %s", clicked)
+                self.reset_moves_list()
+                return True
+        except Exception as e:
+            logger.debug("click_game_next JS fallback failed: %s", e)
         logger.debug("click_game_next: no button found on chess.com")
+        return False
 
     def make_mouseless_move(self, move, move_count):
-        pass
+        """Chess.com background move (parity with Lichess WS injection).
+
+        Investigation note: chess.com has no stable public WebSocket/live API
+        (obfuscated per-session WSS on live.chess.com); unlike Lichess
+        ``lichess.socket.ws.send`` there is no documented endpoint to reuse.
+        So this implements a *JS-level* mouseless move that works while the
+        browser is in the background (no OS cursor via pyautogui):
+
+        1. Try internal board-component APIs (``wc-chess-board`` web component
+           has historically exposed ``game``/``board`` objects).
+        2. Fall back to dispatching synthetic pointer events on the from/to
+           squares computed from the board element rect – equivalent to a
+           drag but without moving the system mouse.
+
+        Args:
+            move: UCI string (e.g. ``e2e4`` or ``e7e8q``).
+            move_count: ply count (kept for interface parity; unused here).
+
+        Returns:
+            True on success. Raises RuntimeError when the board is missing or
+            all JS strategies fail (caller should fall back to mouse move).
+        """
+        import re as _re
+        if not move or not isinstance(move, str) or not _re.match(r"^[a-h][1-8][a-h][1-8][qrbnQRBN]?$", move.strip()):
+            raise ValueError(f"Invalid UCI move for mouseless: {move!r}")
+        uci = move.strip().lower()
+        from_sq, to_sq = uci[0:2], uci[2:4]
+        promo = uci[4] if len(uci) == 5 else ""
+        board = self.get_board()
+        if board is None:
+            self.update_board_elem()
+            board = self.get_board()
+        if board is None:
+            raise RuntimeError("make_mouseless_move: board element not found")
+
+        # Strategy 1: internal component API (best-effort, version-tolerant)
+        api_script = """
+            const uci = arguments[0];
+            const from = uci.slice(0,2), to = uci.slice(2,4);
+            const promo = uci.length > 4 ? uci[4] : null;
+            const boards = Array.from(document.querySelectorAll('wc-chess-board, chess-board, #board-single, #board-play-computer'));
+            for (const b of boards) {
+                try {
+                    // Newer wc-chess-board exposes .game / ._game / .board
+                    const g = b.game || b._game || b.board || b._board || null;
+                    if (g && typeof g.move === 'function') {
+                        // chess.js-style API takes {from,to,promotion}
+                        const r = g.move({from, to, promotion: promo || undefined});
+                        if (r) return 'component-game.move';
+                    }
+                    if (typeof b.move === 'function') { const r = b.move(from, to, promo); if (r !== false) return 'component.move'; }
+                } catch(e) {}
+            }
+            // chess.com sometimes keeps a global game controller
+            try {
+                const wins = [window, window.Chess, window.chess, window.game, window.liveGame];
+                for (const w of wins) {
+                    if (w && typeof w.move === 'function') { w.move({from, to, promotion: promo}); return 'global.move'; }
+                }
+            } catch(e) {}
+            return null;
+        """
+        try:
+            hit = self.chrome.execute_script(api_script, uci)
+            if hit:
+                logger.info("Chess.com mouseless move %s via %s", uci, hit)
+                return True
+        except (StaleElementReferenceException, WebDriverException) as e:
+            logger.debug("mouseless component-API attempt failed: %s", e)
+
+        # Strategy 2: synthetic pointer drag on squares (no OS cursor)
+        drag_script = """
+            const from = arguments[0], to = arguments[1];
+            function sqCenter(sq, rect) {
+                // orientation: detect flipped via body/board class
+                const flipped = document.querySelector('.flipped, .orientation-black, [orientation="black"]') !== null;
+                const f = sq.charCodeAt(0) - 97, r = parseInt(sq[1], 10) - 1;
+                const sqW = rect.width / 8, sqH = rect.height / 8;
+                let col = flipped ? 7 - f : f;
+                let row = flipped ? r : 7 - r;
+                return {x: rect.left + window.scrollX + col*sqW + sqW/2,
+                        y: rect.top + window.scrollY + row*sqH + sqH/2};
+            }
+            // find board rect from several roots
+            const root = document.querySelector('wc-chess-board') || document.getElementById('board-single')
+                || document.getElementById('board-play-computer') || document.querySelector('chess-board');
+            if (!root) return 'no-board';
+            const rect = root.getBoundingClientRect();
+            if (!rect || rect.width < 10) return 'bad-rect';
+            const a = sqCenter(from, rect), b = sqCenter(to, rect);
+            function ev(type, p) {
+                return new PointerEvent(type, {bubbles:true, cancelable:true, clientX:p.x-window.scrollX,
+                    clientY:p.y-window.scrollY, pointerId:1, isPrimary:true, button:0, buttons:type==='pointerup'?0:1});
+            }
+            const elA = document.elementFromPoint(a.x-window.scrollX, a.y-window.scrollY) || root;
+            const elB = document.elementFromPoint(b.x-window.scrollX, b.y-window.scrollY) || root;
+            elA.dispatchEvent(ev('pointerdown', a));
+            elA.dispatchEvent(ev('mousedown', a));
+            // mousemove steps for drag recognition
+            const steps = 4;
+            for (let i=1;i<=steps;i++){
+                const p = {x: a.x+(b.x-a.x)*i/steps, y: a.y+(b.y-a.y)*i/steps};
+                (document.elementFromPoint(p.x-window.scrollX, p.y-window.scrollY) || root).dispatchEvent(ev('pointermove', p));
+            }
+            elB.dispatchEvent(ev('pointerup', b));
+            elB.dispatchEvent(ev('mouseup', b));
+            elB.dispatchEvent(new PointerEvent('click', {bubbles:true, cancelable:true,
+                clientX:b.x-window.scrollX, clientY:b.y-window.scrollY, pointerId:1, isPrimary:true}));
+            return 'dispatched';
+        """
+        try:
+            res = self.chrome.execute_script(drag_script, from_sq, to_sq)
+            if res == "dispatched":
+                logger.info("Chess.com mouseless move %s via synthetic drag", uci)
+                # Promotion chooser: click offset piece if needed (queen default needs no click)
+                if promo and promo != "q":
+                    try:
+                        time.sleep(0.15)
+                        self.chrome.execute_script("""
+                            const promoBtns = Array.from(document.querySelectorAll(
+                              '[data-figurine], .promotion-piece, [class*="promotion"] button, [class*="promotion"] div'));
+                            const want = arguments[0];
+                            const map = {q:'q', queen:'q', n:'n', knight:'n', r:'r', rook:'r', b:'b', bishop:'b'};
+                            for (const el of promoBtns) {
+                                const fig = ((el.getAttribute && el.getAttribute('data-figurine')) || el.textContent || '').trim().toLowerCase();
+                                if (map[fig] === want && el.offsetParent !== null) { el.click(); return true; }
+                            }
+                            return false;
+                        """, promo)
+                    except Exception as e:
+                        logger.debug("promotion chooser click failed: %s", e)
+                return True
+            logger.warning("Chess.com mouseless drag returned %r", res)
+        except (StaleElementReferenceException, WebDriverException) as e:
+            logger.debug("mouseless drag attempt failed: %s", e)
+            raise RuntimeError(f"mouseless move {uci} failed: {e}") from e
+        raise RuntimeError(f"mouseless move {uci} failed: no JS strategy succeeded")

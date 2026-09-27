@@ -27,6 +27,15 @@ DEFAULTS: dict[str, Any] = {
     "skill_level": 20,
     "stockfish_depth": 13,
     "enable_topmost": 1,
+    # Engine & Analysis (P2): all optional, safe defaults = previous behavior
+    "opening_book_path": "",
+    "book_max_plies": 30,
+    "syzygy_path": "",
+    "tablebase_api": True,
+    "show_pv_lines": False,
+    "pv_lines_count": 3,
+    "auto_save_pgn": False,
+    "pgn_games_dir": "games",
 }
 
 # Fields that are not part of current schema but were present in old configs
@@ -48,6 +57,14 @@ class Config:
     skill_level: int = 20
     stockfish_depth: int = 13
     enable_topmost: int = 1
+    opening_book_path: str = ""
+    book_max_plies: int = 30
+    syzygy_path: str = ""
+    tablebase_api: bool = True
+    show_pv_lines: bool = False
+    pv_lines_count: int = 3
+    auto_save_pgn: bool = False
+    pgn_games_dir: str = "games"
 
     @classmethod
     def defaults(cls) -> Config:
@@ -130,7 +147,8 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         out["browser"] = "chrome"
     # booleans
-    for k in ("enable_manual_mode", "enable_mouseless_mode"):
+    for k in ("enable_manual_mode", "enable_mouseless_mode", "tablebase_api",
+              "show_pv_lines", "auto_save_pgn"):
         try:
             out[k] = bool(out[k])
         except Exception:
@@ -157,6 +175,21 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
         out["stockfish_depth"] = max(1, min(20, int(out["stockfish_depth"])))
     except Exception:
         out["stockfish_depth"] = int(DEFAULTS["stockfish_depth"])
+    # engine & analysis paths (string, may be empty = disabled; no existence
+    # enforcement – missing files disable the feature at runtime with a warning)
+    for k in ("opening_book_path", "syzygy_path", "pgn_games_dir"):
+        try:
+            out[k] = str(out.get(k, "") or "").strip()
+        except Exception:
+            out[k] = str(DEFAULTS[k])
+    try:
+        out["book_max_plies"] = max(0, min(200, int(out["book_max_plies"])))
+    except Exception:
+        out["book_max_plies"] = int(DEFAULTS["book_max_plies"])
+    try:
+        out["pv_lines_count"] = max(1, min(5, int(out["pv_lines_count"])))
+    except Exception:
+        out["pv_lines_count"] = int(DEFAULTS["pv_lines_count"])
     out["version"] = CONFIG_VERSION
     return out
 

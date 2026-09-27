@@ -1,11 +1,4 @@
-"""Typed dataclass messages for IPC (Pipe / Queue).
 
-Replaces ad-hoc string protocol like "S_MOVEe4", "EVAL|...", "ERR_BOARD".
-All messages are pickle-able and can be sent via multiprocess.Pipe / Queue.
-
-Backward compatibility: helpers to convert to/from legacy string form for
-gradual migration and for logging.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -52,13 +45,20 @@ class MsgEval:
     kind: Literal["EVAL"] = "EVAL"
 
 @dataclass(frozen=True)
+class MsgPV:
+    """Principal-variation / threat line for the GUI (engine analysis)."""
+    pv_text: str  # e.g. "1. Nf3 (+0.42)  2. c4 (#3)"
+    threat_san: str = ""  # opponent threat after null move ("" = none/unknown)
+    kind: Literal["PV"] = "PV"
+
+@dataclass(frozen=True)
 class MsgError:
     """Error / warning to show in GUI."""
     code: str  # e.g. "ERR_BOARD", "ERR_COLOR", "ERR_MOVES", "ERR_GAMEOVER", "ERR_TIMEOUT", "ERR_DISCONNECT", "ERR_STALE", "ERR_ENGINE", "ERR_EXE", "ERR_PERM"
     detail: str = ""
     kind: Literal["ERROR"] = "ERROR"
 
-BotToGuiMessage = Union[MsgStart, MsgRestart, MsgSingleMove, MsgMultiMove, MsgEval, MsgError]
+BotToGuiMessage = Union[MsgStart, MsgRestart, MsgSingleMove, MsgMultiMove, MsgEval, MsgPV, MsgError]
 GuiToBotMessage = Union[MsgDelete]
 PipeMessage = Union[BotToGuiMessage, GuiToBotMessage, str]  # str for legacy fallback
 
@@ -81,11 +81,23 @@ class OverlayEval:
     kind: Literal["OVERLAY_EVAL"] = "OVERLAY_EVAL"
 
 @dataclass(frozen=True)
+class OverlayLines:
+    """Extra PV arrows alongside the best-move arrow.
+
+    ``lines``: list of {uci, san, score} dicts (see EngineService.top_moves_to_pv).
+    The overlay resolves UCIs to pixels via the board position it already has;
+    the bot therefore sends logical UCIs, not screen coords.
+    """
+    lines: list[dict[str, Any]]
+    threat_uci: str = ""
+    kind: Literal["LINES"] = "LINES"
+
+@dataclass(frozen=True)
 class OverlayClear:
     """Clear overlay arrows."""
     kind: Literal["CLEAR"] = "CLEAR"
 
-OverlayMessage = Union[OverlayArrows, OverlayEval, OverlayClear, List[Any], Dict[str, Any]]  # legacy list/dict fallback
+OverlayMessage = Union[OverlayArrows, OverlayEval, OverlayLines, OverlayClear, List[Any], Dict[str, Any]]  # legacy list/dict fallback
 
 
 # ---------- Serialization for legacy string protocol ----------
@@ -102,6 +114,8 @@ def bot_msg_to_legacy(msg: BotToGuiMessage) -> str:
         return "M_MOVE" + ",".join(msg.sans)
     if isinstance(msg, MsgEval):
         return f"EVAL|{msg.eval_str}|{msg.wdl_str}|{msg.material_str}|{msg.bot_acc}|{msg.opponent_acc}"
+    if isinstance(msg, MsgPV):
+        return f"PV|{msg.pv_text}|{msg.threat_san}"
     if isinstance(msg, MsgError):
         if msg.detail:
             return f"{msg.code}|{msg.detail}" if "|" not in msg.code else f"{msg.code}{msg.detail}"
@@ -128,6 +142,10 @@ def legacy_to_bot_msg(s: str) -> BotToGuiMessage | str:
         if len(parts) >= 6:
             return MsgEval(eval_str=parts[1], wdl_str=parts[2], material_str=parts[3], bot_acc=parts[4], opponent_acc=parts[5])
         return s
+    if s.startswith("PV|"):
+        parts = s.split("|")
+        if len(parts) >= 2:
+            return MsgPV(pv_text=parts[1], threat_san=parts[2] if len(parts) > 2 else "")
     if s.startswith("ERR_"):
         # ERR_CODE|detail or ERR_CODE
         if "|" in s:
@@ -138,7 +156,7 @@ def legacy_to_bot_msg(s: str) -> BotToGuiMessage | str:
 
 
 def is_typed_pipe_msg(obj: Any) -> bool:
-    return isinstance(obj, (MsgStart, MsgRestart, MsgSingleMove, MsgMultiMove, MsgEval, MsgError, MsgDelete))
+    return isinstance(obj, (MsgStart, MsgRestart, MsgSingleMove, MsgMultiMove, MsgEval, MsgPV, MsgError, MsgDelete))
 
 
 def overlay_to_legacy(msg: OverlayMessage) -> Any:
@@ -154,6 +172,8 @@ def overlay_to_legacy(msg: OverlayMessage) -> Any:
         if msg.is_white is not None:
             d["is_white"] = msg.is_white
         return d
+    if isinstance(msg, OverlayLines):
+        return {"pv_lines": [dict(entry) for entry in msg.lines], "threat_uci": msg.threat_uci}
     return msg  # already legacy
 
 
@@ -170,6 +190,9 @@ def legacy_to_overlay_msg(obj: Any) -> OverlayMessage:
             board_position=obj.get("board_position"),
             is_white=obj.get("is_white"),
         )
-    if isinstance(obj, (OverlayArrows, OverlayEval, OverlayClear)):
+    if isinstance(obj, dict) and "pv_lines" in obj:
+        return OverlayLines(lines=list(obj.get("pv_lines") or []),
+                            threat_uci=obj.get("threat_uci") or "")
+    if isinstance(obj, (OverlayArrows, OverlayEval, OverlayLines, OverlayClear)):
         return obj
     return obj

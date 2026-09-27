@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Added
+- Opening book (`src/opening_book.py`) — optional Polyglot `book.bin` for first N plies (weighted-random, `opening_book_path`/`book_max_plies` config, wired into `StockfishBot` before engine search).
+- Endgame tablebase probing (`src/tablebase.py`) — local Syzygy (`syzygy_path`) with Lichess API fallback (`tablebase_api`, stdlib only) for ≤7 pieces; exact move preferred over search.
+- PGN export polish (`src/pgn_export.py`) — full headers (`[Site]` `[Date]` `[White]` `[Black]` `[Result]` `[TimeControl]`), SAN `+/#`, NAGs (`$2/$4/$6` from cp-loss buckets), unique filenames, auto-save per finished game (`auto_save_pgn`/`pgn_games_dir`); GUI Export PGN refactored onto it.
+- Threat & line display — `EngineService.get_top_moves/top_moves_to_pv/format_pv_text/threat_move` (null-move), `MsgPV` + `OverlayLines` protocol, overlay PV/threat arrows, GUI PV label (`show_pv_lines`/`pv_lines_count`, default off).
+- Self-play / analysis mode — `LocalBoard` FEN/PGN load, ply step-through, eval-bar payloads, engine self-play, PGN export; `analysis.py` real per-move evals + NAGs + accuracy, `analyze_position`, `self_play` (all headless).
+- Engine & Analysis config keys (`config_store.py`): `opening_book_path`, `book_max_plies`, `syzygy_path`, `tablebase_api`, `show_pv_lines`, `pv_lines_count`, `auto_save_pgn`, `pgn_games_dir` (old configs migrate cleanly).
+- `tests/test_engine_analysis.py` — 34 tests covering all five items.
 - `docs/ARCHITECTURE.md` — Mermaid pipeline, process/sequence/class diagrams, module map, IPC and resilience patterns.
 - `docs/GRABBER_GUIDE.md` — step-by-step Grabber authoring guide (contract, selectors, example site, tests, GUI wiring).
 - `docs/TROUBLESHOOTING.md` — expanded wiki: Chrome/Driver variations, DOM breakages, Wayland/overlay, DPI & multi-monitor, Linux input, FEN resync, error codes (`ERR_*`), log collection.

@@ -29,7 +29,7 @@ if _kb is None:
 
 
 class StockfishBot(multiprocess.Process):
-    def __init__(self, chrome_url, chrome_session_id, website, pipe, overlay_queue, stockfish_path, enable_manual_mode, enable_mouseless_mode, enable_non_stop_puzzles, enable_non_stop_matches, mouse_latency, slow_mover, skill_level, stockfish_depth, memory=None, cpu_threads=None, browser: str | None = None):
+    def __init__(self, chrome_url, chrome_session_id, website, pipe, overlay_queue, stockfish_path, enable_manual_mode, enable_mouseless_mode, enable_non_stop_puzzles, enable_non_stop_matches, mouse_latency, slow_mover, skill_level, stockfish_depth, memory=None, cpu_threads=None, browser: str | None = None, engine_options: dict | None = None):
         multiprocess.Process.__init__(self)
         self.chrome_url = chrome_url
         self.chrome_session_id = chrome_session_id
@@ -65,6 +65,22 @@ class StockfishBot(multiprocess.Process):
         self.is_white = None
         self._stockfish = None
         self._shutdown = False
+        # Engine & Analysis options (all optional – defaults preserve behavior)
+        _opts = dict(engine_options) if isinstance(engine_options, dict) else {}
+        self.opening_book_path = str(_opts.get("opening_book_path", "") or "")
+        try:
+            self.book_max_plies = max(0, min(200, int(_opts.get("book_max_plies", 30))))
+        except Exception:
+            self.book_max_plies = 30
+        self.syzygy_path = str(_opts.get("syzygy_path", "") or "")
+        self.tablebase_api = bool(_opts.get("tablebase_api", True))
+        self.show_pv_lines = bool(_opts.get("show_pv_lines", False))
+        try:
+            self.pv_lines_count = max(1, min(5, int(_opts.get("pv_lines_count", 3))))
+        except Exception:
+            self.pv_lines_count = 3
+        self.auto_save_pgn = bool(_opts.get("auto_save_pgn", False))
+        self.pgn_games_dir = str(_opts.get("pgn_games_dir", "games") or "games")
         # P1: Better accuracy model – centipawn loss tracking
         self.white_cp_losses = []
         self.black_cp_losses = []
@@ -78,7 +94,9 @@ class StockfishBot(multiprocess.Process):
             from move_executor import MoveExecutor as _ME
             from game_loop import GameLoopState as _GL
             self._board_sync = _BS()
-            self._engine_service = _ES(stockfish_path, stockfish_depth, self.cpu_threads, self.memory, slow_mover, skill_level)
+            self._engine_service = _ES(stockfish_path, stockfish_depth, self.cpu_threads, self.memory, slow_mover, skill_level,
+                                       opening_book_path=self.opening_book_path, book_max_plies=self.book_max_plies,
+                                       syzygy_path=self.syzygy_path or None, tablebase_api=self.tablebase_api)
             # keep cp losses synced
             self._engine_service.white_cp_losses = self.white_cp_losses
             self._engine_service.black_cp_losses = self.black_cp_losses
@@ -161,10 +179,19 @@ class StockfishBot(multiprocess.Process):
         except Exception:
             pass
 
-    def _reconcile_board_fen(self, board, move_list):
-        """Delegate to BoardSync (extracted)."""
+    def _reconcile_board_fen(self, board, move_list, variant: str | None = None):
+        """Delegate to BoardSync (extracted). Variant-aware."""
+        if variant is None:
+            try:
+                if hasattr(self.grabber, "detect_variant"):
+                    variant = self.grabber.detect_variant()
+            except Exception:
+                variant = None
         if getattr(self, "_board_sync", None) is not None:
             try:
+                return self._board_sync.reconcile_board_fen(board, move_list, variant=variant)
+            except TypeError:
+                # Back-compat with older BoardSync signature
                 return self._board_sync.reconcile_board_fen(board, move_list)
             except Exception as e:
                 logger.debug("BoardSync delegate failed: %s", e)
@@ -441,21 +468,147 @@ class StockfishBot(multiprocess.Process):
                 time.sleep(0.1)
 
     def go_to_next_puzzle(self):
+        """Advance to next puzzle (both sites). Returns True if clicked."""
+        clicked = False
         try:
-            self.grabber.click_puzzle_next()
+            clicked = bool(self.grabber.click_puzzle_next())
         except Exception as e:
             logger.warning("go_to_next_puzzle failed: %s", e)
         self._safe_send(proto.MsgRestart())
         self.wait_for_gui_to_delete()
+        return clicked
 
     def find_new_online_match(self):
+        """Next-game loop: rematch/new-opponent for lichess AND chess.com.
+
+        Mirrors the Lichess 'New opponent' flow for chess.com rematch/new-game
+        buttons. Waits briefly for the end-of-game modal, clicks via the
+        grabber's resilient selector chain, resets cached moves, and hands
+        control back to the GUI via RESTART/DELETE.
+        Returns True if a button was clicked.
+        """
         time.sleep(2)
+        clicked = False
         try:
-            self.grabber.click_game_next()
+            clicked = bool(self.grabber.click_game_next())
+            if not clicked:
+                logger.info("find_new_online_match: no next-game button for %s (modal may not be up yet)",
+                            getattr(self, "website", "?"))
+                # One retry after a short wait – modal can animate in late
+                time.sleep(1.5)
+                try:
+                    clicked = bool(self.grabber.click_game_next())
+                except Exception as e:
+                    logger.debug("find_new_online_match retry failed: %s", e)
         except Exception as e:
             logger.warning("find_new_online_match failed: %s", e)
+        try:
+            self.grabber.reset_moves_list()
+        except Exception:
+            pass
         self._safe_send(proto.MsgRestart())
         self.wait_for_gui_to_delete()
+        return clicked
+
+    # --- Engine & Analysis helpers (book / tablebase / PV / autosave) ---
+
+    def _choose_book_move(self, board) -> str | None:
+        """Polyglot book move (UCI) for the first N plies, or None."""
+        if not getattr(self, "opening_book_path", ""):
+            return None
+        try:
+            svc = getattr(self, "_engine_service", None)
+            if svc is None:
+                from engine_service import EngineService as _ES
+                svc = _ES(self.stockfish_path, self.stockfish_depth, self.cpu_threads,
+                          self.memory, self.slow_mover, self.skill_level,
+                          opening_book_path=self.opening_book_path,
+                          book_max_plies=self.book_max_plies)
+                self._engine_service = svc
+            return svc.get_book_move(board)
+        except Exception as e:
+            logger.debug("_choose_book_move failed: %s", e)
+            return None
+
+    def _choose_tablebase_move(self, board) -> str | None:
+        """Tablebase best move (UCI) for <=7-piece endgames, or None."""
+        try:
+            svc = getattr(self, "_engine_service", None)
+            if svc is None:
+                return None
+            hit = svc.probe_tablebase(board)
+            if hit and hit.get("best_move") and hit["best_move"] in [m.uci() for m in board.legal_moves]:
+                logger.info("Tablebase move %s (%s wdl=%s dtz=%s)",
+                            hit["best_move"], hit.get("source"), hit.get("wdl"), hit.get("dtz"))
+                return hit["best_move"]
+        except Exception as e:
+            logger.debug("_choose_tablebase_move failed: %s", e)
+        return None
+
+    def _maybe_send_pv(self, board, stockfish, best_uci: str | None = None):
+        """Send PV text (GUI) + PV/threat arrows (overlay) when enabled."""
+        if not getattr(self, "show_pv_lines", False):
+            return
+        try:
+            svc = getattr(self, "_engine_service", None)
+            if svc is None:
+                return
+            stockfish.set_position([m.uci() for m in board.move_stack])
+            top = svc.get_top_moves(stockfish, num_moves=self.pv_lines_count)
+            if not top:
+                return
+            pvs = svc.top_moves_to_pv(board, top, max_lines=self.pv_lines_count)
+            if not pvs:
+                return
+            pv_text = svc.format_pv_text(pvs)
+            threat_uci = None
+            threat_san = ""
+            try:
+                threat_uci = svc.threat_move(board, stockfish)
+                if threat_uci:
+                    threat_san = board.copy().san(chess.Move.from_uci(threat_uci))
+            except Exception:
+                threat_uci, threat_san = None, ""
+            self._safe_send(proto.MsgPV(pv_text=pv_text, threat_san=threat_san or ""))
+            try:
+                # Skip the best-move line (index 0) – the main arrow already shows it
+                extra = [{"uci": p["uci"], "san": p["san"]} for p in pvs[1:]]
+                self.overlay_queue.put(proto.OverlayLines(lines=extra, threat_uci=threat_uci or ""))
+            except Exception as e:
+                logger.debug("PV overlay put failed: %s", e)
+        except Exception as e:
+            logger.debug("_maybe_send_pv failed: %s", e)
+
+    def _maybe_autosave_game(self, move_list, board):
+        """Auto-save finished game PGN (headers + NAGs) when enabled."""
+        if not getattr(self, "auto_save_pgn", False):
+            return None
+        try:
+            from grabbers.grabber import Grabber as _G
+            from pgn_export import auto_save_game, board_result, default_headers, nags_from_losses
+            sans = [m for m in (move_list or []) if _G.normalize_result_text(m) is None]
+            if not sans:
+                return None
+            result = board_result(board)
+            site = "lichess.org" if getattr(self, "website", "") == "lichess" else "chess.com"
+            if getattr(self, "is_white", None):
+                white, black = "Me", "Opponent"
+            elif self.is_white is False:
+                white, black = "Opponent", "Me"
+            else:
+                white, black = "White", "Black"
+            headers = default_headers(site=site, white=white, black=black,
+                                      result=result, event="Online Game")
+            nags = nags_from_losses(getattr(self, "white_cp_losses", []) or [],
+                                    getattr(self, "black_cp_losses", []) or [])
+            path = auto_save_game(getattr(self, "pgn_games_dir", "games"), sans,
+                                  headers=headers, nags=nags, result=result)
+            if path:
+                logger.info("Auto-saved game PGN to %s", path)
+            return path
+        except Exception as e:
+            logger.debug("_maybe_autosave_game failed: %s", e)
+            return None
 
     def run(self):
         self._setup_signal_handlers()
@@ -550,9 +703,50 @@ class StockfishBot(multiprocess.Process):
             if len(move_list) > 0 and re.match(score_pattern, move_list[-1]):
                 self._safe_send(proto.MsgError(code="ERR_GAMEOVER"))
                 return
+            # Draw / resign / abort handling: result banners beyond score_pattern
+            try:
+                _res = self.grabber.get_game_result() if hasattr(self.grabber, "get_game_result") else None
+                if _res is not None:
+                    logger.info("Game already has result %s at startup – aborting", _res)
+                    self._safe_send(proto.MsgError(code="ERR_GAMEOVER", detail=str(_res)))
+                    return
+                if self.grabber.is_game_over():
+                    logger.info("Grabber reports game over at startup")
+                    self._safe_send(proto.MsgError(code="ERR_GAMEOVER"))
+                    return
+            except Exception as e:
+                logger.debug("startup game-over check failed: %s", e)
 
-            board = chess.Board()
+            # Variant support: detect Chess960 / 3-check / KotH for validation
+            variant = "standard"
+            try:
+                if hasattr(self.grabber, "detect_variant"):
+                    variant = self.grabber.detect_variant() or "standard"
+            except Exception:
+                variant = "standard"
+            try:
+                from board_sync import BoardSync as _BS2
+                if _BS2.normalize_variant(variant) != "standard":
+                    logger.info("Detected variant: %s", variant)
+                    if not _BS2.is_variant_supported(variant):
+                        logger.warning("Variant %r not engine-supported – playing with standard rules", variant)
+            except Exception:
+                pass
+
+            try:
+                from board_sync import BoardSync as _BSB
+                board = _BSB.create_board(variant=variant)
+            except Exception:
+                board = chess.Board()
             for mv in move_list:
+                # Skip stray result markers that scrapers may have missed
+                try:
+                    from grabbers.grabber import Grabber as _G
+                    if _G.normalize_result_text(mv) is not None:
+                        logger.debug("Skipping result marker in initial list: %r", mv)
+                        continue
+                except Exception:
+                    pass
                 try:
                     board.push_san(mv)
                 except Exception as e:
@@ -578,32 +772,65 @@ class StockfishBot(multiprocess.Process):
                     return
                 if (self.is_white and board.turn == chess.WHITE) or (not self.is_white and board.turn == chess.BLACK):
                     move = None
+                    move_source = "engine"
+                    # 1) Opening book (first N plies, instant + human-like)
                     try:
-                        # FAST: time-limited search keeps bullet/blitz responsive
-                        # Depth 20 blocking can take >1s; movetime 150-300ms is much faster
-                        # Scale by slow_mover so high slow_mover still gets a bit more time
-                        if self.slow_mover < 60:
-                            _mt = 100
-                        elif self.slow_mover < 100:
-                            _mt = 150
-                        elif self.stockfish_depth >= 18:
-                            _mt = 300
-                        else:
-                            _mt = 200
-                        try:
-                            move = stockfish.get_best_move_time(_mt)
-                        except Exception:
-                            move = stockfish.get_best_move()
+                        book_move = self._choose_book_move(board)
+                        if book_move:
+                            move = book_move
+                            move_source = "book"
                     except Exception as e:
-                        logger.error("get_best_move failed: %s", e)
-                        self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
-                        time.sleep(0.2)
-                        continue
+                        logger.debug("book lookup failed: %s", e)
+                    # 2) Endgame tablebase (<=7 pieces, exact)
+                    if not move:
+                        try:
+                            tb_move = self._choose_tablebase_move(board)
+                            if tb_move:
+                                move = tb_move
+                                move_source = "tablebase"
+                        except Exception as e:
+                            logger.debug("tablebase lookup failed: %s", e)
+                    # 3) Engine search (time-limited for bullet/blitz)
+                    if not move:
+                        try:
+                            # FAST: time-limited search keeps bullet/blitz responsive
+                            # Depth 20 blocking can take >1s; movetime 150-300ms is much faster
+                            # Scale by slow_mover so high slow_mover still gets a bit more time
+                            if self.slow_mover < 60:
+                                _mt = 100
+                            elif self.slow_mover < 100:
+                                _mt = 150
+                            elif self.stockfish_depth >= 18:
+                                _mt = 300
+                            else:
+                                _mt = 200
+                            try:
+                                move = stockfish.get_best_move_time(_mt)
+                            except Exception:
+                                move = stockfish.get_best_move()
+                        except Exception as e:
+                            logger.error("get_best_move failed: %s", e)
+                            self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
+                            time.sleep(0.2)
+                            continue
+                    else:
+                        logger.info("Playing %s move %s", move_source, move)
+                        # Keep wrapper position in sync (book/tablebase skip search)
+                        try:
+                            stockfish.set_position([m.uci() for m in board.move_stack])
+                        except Exception as e:
+                            logger.debug("position sync after %s move failed: %s", move_source, e)
 
                     if not move:
                         logger.warning("get_best_move returned None/empty")
                         time.sleep(0.1)
                         continue
+
+                    # PV / threat lines for overlay + GUI (gated by show_pv_lines)
+                    try:
+                        self._maybe_send_pv(board, stockfish, best_uci=move)
+                    except Exception as e:
+                        logger.debug("PV send failed: %s", e)
 
                     if board.turn == chess.WHITE:
                         white_best_moves.append(move)
@@ -689,10 +916,27 @@ class StockfishBot(multiprocess.Process):
                         move_list.append(move_san)
                         if self.enable_mouseless_mode and not self.grabber.is_game_puzzles():
                             try:
-                                self.grabber.make_mouseless_move(move, move_count + 1)
+                                # ply count AFTER our move (1-based), parity with lichess `a` param
+                                _ply = len(move_list)
+                                _ok = self.grabber.make_mouseless_move(move, _ply)
+                                if _ok is False:
+                                    # Grabber signals unsupported – fall back to mouse
+                                    logger.info("Mouseless returned False, falling back to mouse for %s", move)
+                                    self.make_move(move)
+                            except NameError as e:
+                                logger.error("mouseless move bookkeeping failed: %s", e)
+                                try:
+                                    self.make_move(move)
+                                except Exception as e2:
+                                    logger.error("make_move fallback failed: %s", e2)
+                                    self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
                             except Exception as e:
-                                logger.warning("mouseless move failed: %s", e)
-                                self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
+                                logger.warning("mouseless move failed (%s), falling back to mouse: %s", move, e)
+                                try:
+                                    self.make_move(move)
+                                except Exception as e2:
+                                    logger.error("make_move fallback failed: %s", e2)
+                                    self._safe_send(proto.MsgError(code="ERR_DISCONNECT"))
                         else:
                             try:
                                 self.make_move(move)
@@ -704,12 +948,29 @@ class StockfishBot(multiprocess.Process):
                     self.send_eval_data(stockfish, board, white_moves, white_best_moves, black_moves, black_best_moves)
                     self._safe_send(proto.MsgSingleMove(san=move_san))
 
-                    if board.is_checkmate():
+                    if board.is_game_over():
+                        _why = "checkmate" if board.is_checkmate() else (
+                            "stalemate" if board.is_stalemate() else "draw/claim")
+                        logger.info("Board reports game over (%s)", _why)
+                        self._maybe_autosave_game(move_list, board)
                         if self.enable_non_stop_puzzles and self.grabber.is_game_puzzles():
                             self.go_to_next_puzzle()
                         elif self.enable_non_stop_matches and not self.enable_non_stop_puzzles:
                             self.find_new_online_match()
                         return
+                    # Also honor site result banners (resign/abort/timeout are not
+                    # visible in python-chess until the result marker is scraped)
+                    try:
+                        if self.grabber.is_game_over():
+                            logger.info("Site reports game over after our move")
+                            self._maybe_autosave_game(move_list, board)
+                            if self.enable_non_stop_puzzles and self.grabber.is_game_puzzles():
+                                self.go_to_next_puzzle()
+                            elif self.enable_non_stop_matches and not self.enable_non_stop_puzzles:
+                                self.find_new_online_match()
+                            return
+                    except Exception:
+                        pass
                     time.sleep(0.02)
 
                 # Wait for opponent
@@ -720,6 +981,7 @@ class StockfishBot(multiprocess.Process):
                         return
                     try:
                         if self.grabber.is_game_over():
+                            self._maybe_autosave_game(move_list, board)
                             if self.enable_non_stop_puzzles and self.grabber.is_game_puzzles():
                                 self.go_to_next_puzzle()
                             elif self.enable_non_stop_matches and not self.enable_non_stop_puzzles:
@@ -768,12 +1030,14 @@ class StockfishBot(multiprocess.Process):
                         previous_move_list = []
                         break
 
-                    # Case 2: takeback / abort – move count decreased but not zero
+                    # Case 2: takeback / undo / abort – move count decreased but not zero.
+                    # Re-sync board when move count decreases (takeback/undo support).
                     if len(new_move_list) < len(previous_move_list) and len(new_move_list) != 0:
                         logger.info("Takeback/abort detected: %d -> %d", len(previous_move_list), len(new_move_list))
-                        # Reconcile board
-                        new_board = chess.Board()
+                        # Reconcile board (variant-aware)
                         try:
+                            from board_sync import BoardSync as _BST
+                            new_board = _BST.create_board(variant=variant)
                             for san in new_move_list:
                                 new_board.push_san(san)
                             board = new_board
@@ -782,15 +1046,24 @@ class StockfishBot(multiprocess.Process):
                             logger.warning("Takeback resync failed: %s", e)
                             board, _ = self._reconcile_board_fen(board, new_move_list)
                             stockfish.set_position([m.uci() for m in board.move_stack])
-                        # Trim accuracy lists
-                        total = len(new_move_list)
-                        white_moves = white_moves[: (total+1)//2]
-                        white_best_moves = white_best_moves[: (total+1)//2]
-                        black_moves = black_moves[: total//2]
-                        black_best_moves = black_best_moves[: total//2]
-                        # trim cp losses as well
-                        self.white_cp_losses = self.white_cp_losses[: (total+1)//2]
-                        self.black_cp_losses = self.black_cp_losses[: total//2]
+                        # Trim per-move + accuracy history via shared helper
+                        try:
+                            from board_sync import BoardSync as _BST2
+                            total = len(new_move_list)
+                            (white_moves, white_best_moves, black_moves, black_best_moves,
+                             _wl, _bl) = _BST2.trim_history_to_ply(
+                                white_moves, white_best_moves, black_moves, black_best_moves,
+                                self.white_cp_losses, self.black_cp_losses, total)
+                            self.white_cp_losses, self.black_cp_losses = _wl, _bl
+                        except Exception:
+                            total = len(new_move_list)
+                            white_moves = white_moves[: (total+1)//2]
+                            white_best_moves = white_best_moves[: (total+1)//2]
+                            black_moves = black_moves[: total//2]
+                            black_best_moves = black_best_moves[: total//2]
+                            # trim cp losses as well
+                            self.white_cp_losses = self.white_cp_losses[: (total+1)//2]
+                            self.black_cp_losses = self.black_cp_losses[: total//2]
                         try:
                             self._prev_eval_cp = self._eval_to_white_cp(stockfish.get_evaluation())
                         except Exception:
@@ -808,8 +1081,9 @@ class StockfishBot(multiprocess.Process):
                     # Case 3: FEN mismatch when same move count but different moves (e.g., undo+ different line)
                     if len(new_move_list) == len(previous_move_list) and new_move_list != previous_move_list:
                         logger.info("Move list changed without length increase – possible takeback with new move")
-                        new_board = chess.Board()
                         try:
+                            from board_sync import BoardSync as _BSF
+                            new_board = _BSF.create_board(variant=variant)
                             for san in new_move_list:
                                 new_board.push_san(san)
                             board = new_board
@@ -826,9 +1100,26 @@ class StockfishBot(multiprocess.Process):
 
                     # Normal: opponent made a move
                     if len(new_move_list) > len(previous_move_list):
-                        # Validate FEN before accepting
+                        # Validate FEN before accepting (variant-aware). Also
+                        # detect trailing result markers (1-0 etc.) = game end.
                         try:
-                            tmp = chess.Board()
+                            from grabbers.grabber import Grabber as _GV
+                            if _GV.normalize_result_text(new_move_list[-1]) is not None:
+                                logger.info("Result marker %r detected – game over", new_move_list[-1])
+                                move_list = [m for m in new_move_list if _GV.normalize_result_text(m) is None]
+                                self._maybe_autosave_game(move_list, board)
+                                if self.enable_non_stop_puzzles and self.grabber.is_game_puzzles():
+                                    self.go_to_next_puzzle()
+                                elif self.enable_non_stop_matches and not self.enable_non_stop_puzzles:
+                                    self.find_new_online_match()
+                                return
+                        except SystemExit:
+                            raise
+                        except Exception:
+                            pass
+                        try:
+                            from board_sync import BoardSync as _BSV
+                            tmp = _BSV.create_board(variant=variant)
                             for san in new_move_list:
                                 tmp.push_san(san)
                             move_list = new_move_list
@@ -884,7 +1175,9 @@ class StockfishBot(multiprocess.Process):
                     except Exception:
                         pass
 
-                if board.is_checkmate():
+                if board.is_game_over():
+                    logger.info("Board reports game over after opponent move")
+                    self._maybe_autosave_game(move_list, board)
                     if self.enable_non_stop_puzzles and self.grabber.is_game_puzzles():
                         self.go_to_next_puzzle()
                     elif self.enable_non_stop_matches and not self.enable_non_stop_puzzles:

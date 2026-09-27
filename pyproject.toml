@@ -47,6 +47,11 @@ all = [
 testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["src"]
+filterwarnings = [
+    # stockfish lib logs via __del__ when constructed with an invalid path
+    # (exercised by engine tests) – third-party noise, not our warning.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.ruff]
 target-version = "py310"

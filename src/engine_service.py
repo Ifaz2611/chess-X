@@ -15,7 +15,9 @@ logger = get_logger("engine_service")
 
 
 class EngineService:
-    def __init__(self, stockfish_path: str, depth: int, threads: int, memory: int, slow_mover: int, skill_level: int):
+    def __init__(self, stockfish_path: str, depth: int, threads: int, memory: int, slow_mover: int, skill_level: int,
+                 opening_book_path: str | None = None, book_max_plies: int = 30,
+                 syzygy_path: str | None = None, tablebase_api: bool = True):
         self.stockfish_path = stockfish_path
         self.depth = depth
         self.threads = threads
@@ -26,6 +28,13 @@ class EngineService:
         self.white_cp_losses: list[int] = []
         self.black_cp_losses: list[int] = []
         self._prev_eval_cp: int | None = None
+        # Optional opening book + tablebase (lazy, disabled when paths empty)
+        self._book = None
+        self._book_path = (opening_book_path or "").strip()
+        self._book_max_plies = max(0, int(book_max_plies))
+        self._probe = None
+        self._syzygy_path = (syzygy_path or "").strip()
+        self._tablebase_api = bool(tablebase_api)
 
     def create_stockfish(self):
         from stockfish import Stockfish
@@ -151,3 +160,126 @@ class EngineService:
             return str(advantage)
         else:
             return "0"
+
+    # --- Opening book (optional Polyglot book.bin for first N moves) ---
+
+    def get_book(self):
+        """Lazy OpeningBook instance (None when no path configured)."""
+        if self._book is not None:
+            return self._book
+        if not self._book_path:
+            return None
+        try:
+            from opening_book import OpeningBook
+            self._book = OpeningBook(self._book_path, max_plies=self._book_max_plies)
+            return self._book
+        except Exception as e:
+            logger.debug("OpeningBook init failed: %s", e)
+            return None
+
+    def get_book_move(self, board: chess.Board) -> str | None:
+        """Book UCI move for this position, or None (out of book/disabled)."""
+        try:
+            book = self.get_book()
+            if book is None:
+                return None
+            return book.pick_move_uci(board)
+        except Exception as e:
+            logger.debug("get_book_move failed: %s", e)
+            return None
+
+    # --- Endgame tablebase probing (local Syzygy or Lichess API, <=7 pieces) ---
+
+    def get_probe(self):
+        """Lazy TablebaseProbe instance (always available; backends optional)."""
+        if self._probe is not None:
+            return self._probe
+        try:
+            from tablebase import TablebaseProbe
+            self._probe = TablebaseProbe(syzygy_path=self._syzygy_path or None,
+                                         use_api=self._tablebase_api)
+            return self._probe
+        except Exception as e:
+            logger.debug("TablebaseProbe init failed: %s", e)
+            return None
+
+    def probe_tablebase(self, board: chess.Board) -> dict | None:
+        """Probe tablebase for this position. Dict(wdl, dtz, best_move, source) or None."""
+        try:
+            probe = self.get_probe()
+            if probe is None:
+                return None
+            return probe.probe(board)
+        except Exception as e:
+            logger.debug("probe_tablebase failed: %s", e)
+            return None
+
+    # --- Threat & line display (MultiPV via get_top_moves) ---
+
+    def get_top_moves(self, stockfish, num_moves: int = 3) -> list[dict]:
+        """Top-N moves with evals via the wrapper's get_top_moves (never raises)."""
+        try:
+            moves = stockfish.get_top_moves(max(1, min(5, int(num_moves))))
+            return [m for m in (moves or []) if isinstance(m, dict) and m.get("Move")]
+        except Exception as e:
+            logger.debug("get_top_moves failed: %s", e)
+            return []
+
+    @staticmethod
+    def top_moves_to_pv(board: chess.Board, top_moves: list[dict], max_lines: int = 3) -> list[dict]:
+        """Convert get_top_moves dicts to display PVs: [{uci, san, cp, mate}].
+
+        SAN is computed for the first ply on a copy so ``+``/``#`` show.
+        The wrapper only provides single-ply entries, so each PV is one move.
+        """
+        pvs: list[dict] = []
+        for entry in top_moves[:max(1, int(max_lines))]:
+            uci = entry.get("Move")
+            if not uci:
+                continue
+            try:
+                probe = board.copy()
+                san = probe.san(chess.Move.from_uci(uci))
+            except Exception:
+                san = uci
+            pvs.append({"uci": uci, "san": san,
+                        "cp": entry.get("Centipawn"), "mate": entry.get("Mate")})
+        return pvs
+
+    @staticmethod
+    def format_pv_text(pvs: list[dict]) -> str:
+        """One-line PV text for the GUI, e.g. '1. Nf3 (+0.42)  2. c4 (#3)'."""
+        parts = []
+        for i, pv in enumerate(pvs, start=1):
+            if pv.get("mate") is not None:
+                score = f"M{pv['mate']}"
+            elif pv.get("cp") is not None:
+                score = f"{pv['cp'] / 100:+.2f}"
+            else:
+                score = "?"
+            parts.append(f"{i}. {pv.get('san', pv.get('uci', '?'))} ({score})")
+        return "  ".join(parts)
+
+    @staticmethod
+    def threat_move(board: chess.Board, stockfish) -> str | None:
+        """Opponent's threat: null-move trick – best reply if we passed.
+
+        Returns UCI of the opponent's best move after a null move, or None.
+        Falls back gracefully when the position has no legal null (check).
+        """
+        try:
+            probe = board.copy()
+            probe.push(chess.Move.null())
+            stockfish.set_position([m.uci() for m in probe.move_stack])
+            mv = stockfish.get_best_move_time(50)
+            # Restore our real position for the caller
+            stockfish.set_position([m.uci() for m in board.move_stack])
+            if mv and chess.Move.from_uci(mv) in probe.legal_moves:
+                return mv
+        except Exception as e:
+            logger.debug("threat_move failed: %s", e)
+            try:
+                stockfish.set_position([m.uci() for m in board.move_stack])
+            except Exception as restore_error:
+                logger.debug("threat_move restore failed: %s", restore_error)
+        return None

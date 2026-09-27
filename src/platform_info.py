@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import os
 import platform
 import sys
@@ -52,9 +51,6 @@ def is_retina() -> bool:
         # Fallback: macOS system_profiler check (expensive – cache)
     except Exception:
         pass
-    # Fallback env heuristic: CGDisplay check via NSScreen scale is >1 on retina
-    # We can't reliably detect without GUI toolkit, assume False here and let
-    # display helpers do runtime correction.
     return False
 
 # ------------------------------------------------------------------
@@ -62,15 +58,8 @@ def is_retina() -> bool:
 # ------------------------------------------------------------------
 
 def check_macos_permissions() -> Tuple[bool, str]:
-    """Check macOS accessibility / screen-recording permissions.
 
-    Returns (ok, message). On non-macOS, returns (True, "not macos").
-    This is best-effort: we cannot programmatically check TCC db without
-    private APIs, so we probe known failure modes.
 
-    Guidance mirrors Apple docs: System Settings → Privacy & Security →
-    Accessibility + Screen Recording.
-    """
     if not is_macos():
         return True, "not macos"
     # Check if process has accessibility access via optional AXIsProcessTrusted

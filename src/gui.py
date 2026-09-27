@@ -423,6 +423,9 @@ class GUI:
         self.material_text = self._stat(stats, "MATERIAL")
         self.white_acc_text = self._stat(stats, "BOT ACC")
         self.black_acc_text = self._stat(stats, "OPP ACC")
+        self.pv_text = tk.Label(eval_box, text="", font=("Consolas", 8), fg=TEXT_MUTED,
+                                bg="#F8F6F1", wraplength=300, justify="left")
+        self.pv_text.pack(anchor="w", padx=12, pady=(0, 10))
 
     def _stat(self, parent, name):
         box = tk.Frame(parent, bg="#F8F6F1")
@@ -933,6 +936,9 @@ class GUI:
                 elif isinstance(data, proto.MsgEval):
                     self.update_evaluation_display(data.eval_str, data.wdl_str, data.material_str, data.bot_acc, data.opponent_acc)
                     return
+                elif isinstance(data, proto.MsgPV):
+                    self.update_pv_display(data.pv_text, data.threat_san)
+                    return
                 elif isinstance(data, proto.MsgError):
                     code = data.code
                     detail = data.detail
@@ -992,6 +998,10 @@ class GUI:
                 if len(parts) >= 6:
                     eval_str, wdl_str, material_str, bot_accuracy_str, opponent_accuracy_str = parts[1:6]
                     self.update_evaluation_display(eval_str, wdl_str, material_str, bot_accuracy_str, opponent_accuracy_str)
+            elif data.startswith("PV|"):
+                parts = data.split("|")
+                self.update_pv_display(parts[1] if len(parts) > 1 else "",
+                                       parts[2] if len(parts) > 2 else "")
             elif data.startswith("ERR_EXE"):
                 messagebox.showerror("Error", "Stockfish path provided is not valid!")
                 logger.error("ERR_EXE: invalid stockfish path")
@@ -1365,6 +1375,7 @@ class GUI:
             self.mouse_latency.get(), self.slow_mover.get(),
             self.skill_level.get(), self.stockfish_depth.get(),
             browser=self.browser.get() if hasattr(self, "browser") else "chrome",
+            engine_options=self._engine_options(),
         )
         self.stockfish_bot_process.start()
         # Lazy import overlay so importing gui (e.g. in tests) does not require PyQt6 / EGL
@@ -1380,6 +1391,30 @@ class GUI:
         except Exception:
             pass
         logger.info("Started StockfishBot + overlay")
+
+    def _engine_options(self) -> dict:
+        """Engine & Analysis options for StockfishBot (config-file driven).
+
+        Keys: opening_book_path, book_max_plies, syzygy_path, tablebase_api,
+        show_pv_lines, pv_lines_count, auto_save_pgn, pgn_games_dir.
+        Missing keys fall back to safe defaults (features disabled).
+        """
+        cfg = getattr(self, "_config", {}) or {}
+        try:
+            from config_store import validate as _validate
+            validated = _validate(dict(cfg))
+        except Exception:
+            validated = dict(cfg)
+        return {
+            "opening_book_path": validated.get("opening_book_path", ""),
+            "book_max_plies": validated.get("book_max_plies", 30),
+            "syzygy_path": validated.get("syzygy_path", ""),
+            "tablebase_api": validated.get("tablebase_api", True),
+            "show_pv_lines": validated.get("show_pv_lines", False),
+            "pv_lines_count": validated.get("pv_lines_count", 3),
+            "auto_save_pgn": validated.get("auto_save_pgn", False),
+            "pgn_games_dir": validated.get("pgn_games_dir", "games"),
+        }
 
     def on_stop_button_listener(self):
         if self.stockfish_bot_process is not None:
@@ -1434,6 +1469,12 @@ class GUI:
             self.material_text.update()
             self.white_acc_text.update()
             self.black_acc_text.update()
+            try:
+                if hasattr(self, "pv_text"):
+                    self.pv_text["text"] = ""
+                    self.pv_text.update()
+            except Exception:
+                pass
         except Exception:
             pass
         try:
@@ -1521,6 +1562,16 @@ class GUI:
             if (i * 2) + 1 < len(self.match_moves):
                 data += self.match_moves[i * 2 + 1] + " "
         try:
+            # Full PGN: headers ([Site] [Date] [White] [Black] [Result]
+            # [TimeControl]) + SAN movetext with +/# + result marker.
+            try:
+                from pgn_export import build_pgn, default_headers
+                site = "lichess.org" if str(self.website.get()) == "lichess" else "chess.com"
+                headers = default_headers(site=site, white="Me", black="Opponent",
+                                          result="*", event="Online Game")
+                data = build_pgn(list(self.match_moves), headers=headers, result="*")
+            except Exception as e:
+                logger.debug("PGN header build failed, using bare movetext: %s", e)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(data)
             logger.info("PGN exported to %s", path)
@@ -2098,6 +2149,21 @@ class GUI:
                 self.manual_mode_checkbox.update()
         except Exception:
             pass
+
+    def update_pv_display(self, pv_text, threat_san=""):
+        """Show principal-variation lines + opponent threat (engine analysis)."""
+        try:
+            label = getattr(self, "pv_text", None)
+            if label is None:
+                return
+            text = (pv_text or "").strip()
+            if threat_san:
+                text = (text + f"   Threat: {threat_san}").strip()
+            label["text"] = text
+            label["fg"] = TEXT_PRIMARY if text else TEXT_MUTED
+            label.update()
+        except Exception as e:
+            logger.debug("update_pv_display error: %s", e)
 
     def update_evaluation_display(self, eval_str, wdl_str, material_str, bot_acc, opponent_acc):
         try:

@@ -1,3 +1,4 @@
+import re
 import time
 from abc import ABC, abstractmethod
 
@@ -21,6 +22,29 @@ class Grabber(ABC):
     # Subclasses define their own selector fallback chains
     BOARD_SELECTORS = []
     MOVE_LIST_SELECTORS = []
+
+    # --- Shared game-result patterns (draw / resign / abort handling) ---
+    # Normalized results: "1-0", "0-1", "1/2-1/2", "*"
+    RESULT_SCORE_RE = re.compile(r"(1\s*-\s*0|0\s*-\s*1|1\s*/\s*2\s*-\s*1\s*/\s*2|½\s*-\s*½|\*)")
+    RESULT_KEYWORDS = (
+        "checkmate", "stalemate", "draw", "resign", "abort", "abandon",
+        "time out", "timeout", "flag", "threefold", "repetition",
+        "insufficient", "50-move", "you won", "you lose", "game over",
+        "white won", "black won", "white wins", "black wins",
+    )
+    RESULT_TERMS = ("1-0", "0-1", "1/2-1/2", "½-½", "*")
+
+    # Variant hints matched against URL / DOM text (lowercased)
+    VARIANT_PATTERNS = {
+        "chess960": ("960", "fischer", "chess960", "franklin"),
+        "crazyhouse": ("crazyhouse", "zh", "zhuri"),
+        "kingofthehill": ("king of the hill", "kingofthehill", "koth"),
+        "threecheck": ("3-check", "3 check", "threecheck", "three-check"),
+        "antichess": ("antichess", "anti-chess", "suicide"),
+        "atomic": ("atomic",),
+        "horde": ("horde",),
+        "racingkings": ("racing kings", "racingkings"),
+    }
 
     def __init__(self, chrome_url, chrome_session_id, browser: str | None = None):
         # browser-aware attach (chrome/firefox/edge) – falls back to Chrome for compat
@@ -169,6 +193,125 @@ class Grabber(ABC):
                     break
         except Exception:
             pass
+
+    # -----------------------------------------------------------------------
+    # Shared result / variant helpers (concrete so subclasses can reuse)
+    # -----------------------------------------------------------------------
+
+    @classmethod
+    def normalize_result_text(cls, text: str | None) -> str | None:
+        """Normalize arbitrary banner text to '1-0' / '0-1' / '1/2-1/2' / '*'.
+
+        Returns None when no result marker is present.
+        """
+        if not text or not isinstance(text, str):
+            return None
+        t = text.strip()
+        # Unicode half first
+        if "½-½" in t or "½ – ½" in t or "½–½" in t:
+            return "1/2-1/2"
+        m = cls.RESULT_SCORE_RE.search(t)
+        if not m:
+            return None
+        raw = re.sub(r"\s+", "", m.group(1))
+        if raw in ("1-0", "0-1"):
+            return raw
+        if raw in ("1/2-1/2", "½-½"):
+            return "1/2-1/2"
+        if raw == "*":
+            return "*"
+        return None
+
+    @classmethod
+    def text_looks_like_game_end(cls, text: str | None) -> bool:
+        """True if text contains a result marker or a game-end keyword."""
+        if not text or not isinstance(text, str):
+            return False
+        if cls.normalize_result_text(text) is not None:
+            # "*" alone is ambiguous (live clock uses *?) – require keyword context
+            norm = cls.normalize_result_text(text)
+            if norm != "*":
+                return True
+        low = text.lower()
+        return any(k in low for k in cls.RESULT_KEYWORDS)
+
+    def get_page_text(self, limit: int = 8000) -> str:
+        """Best-effort body innerText via JS (for result-banner scanning)."""
+        try:
+            txt = self.chrome.execute_script(
+                "return (document.body && document.body.innerText) ? document.body.innerText.slice(0, arguments[0]) : '';",
+                int(limit),
+            )
+            return txt or ""
+        except Exception:
+            return ""
+
+    def detect_variant(self) -> str:
+        """Detect chess variant from URL + page text. Returns 'standard' by default.
+
+        Covers Chess960 / 3-check / King of the Hill (+ common lichess/chess.com
+        variants) for board orientation + validation downstream.
+        """
+        try:
+            url = ""
+            try:
+                url = (self.chrome.current_url or "").lower()
+            except Exception:
+                url = ""
+            hay = url + " " + self.get_page_text(limit=2000).lower()
+            for variant, hints in self.VARIANT_PATTERNS.items():
+                if any(h in hay for h in hints):
+                    return variant
+        except Exception:
+            pass
+        return "standard"
+
+    def get_game_result(self) -> str | None:
+        """Return normalized result if the page shows one, else None.
+
+        Subclasses override `_result_banner_texts()` for site-specific DOM;
+        this base implementation falls back to scanning body text.
+        """
+        try:
+            for txt in self._result_banner_texts():
+                norm = self.normalize_result_text(txt)
+                if norm is not None and norm != "*":
+                    return norm
+                if self.text_looks_like_game_end(txt):
+                    # Keyword hit without explicit score – map common phrasing
+                    low = (txt or "").lower()
+                    if "white" in low and ("won" in low or "win" in low):
+                        return "1-0"
+                    if "black" in low and ("won" in low or "win" in low):
+                        return "0-1"
+                    if any(k in low for k in ("draw", "stalemate", "repetition", "insufficient", "50-move")):
+                        return "1/2-1/2"
+                    return "*"
+        except Exception:
+            pass
+        # Fallback: scan whole page text
+        try:
+            page = self.get_page_text()
+            norm = self.normalize_result_text(page)
+            if norm is not None and norm != "*":
+                return norm
+            if self.text_looks_like_game_end(page):
+                return "*"
+        except Exception:
+            pass
+        return None
+
+    def _result_banner_texts(self) -> list:
+        """Site-specific banner texts to scan. Base: empty (page-text fallback)."""
+        return []
+
+    def has_draw_offer(self) -> bool:
+        """True if a draw-offer accept/decline UI is currently visible."""
+        return False
+
+    def has_resign_button(self) -> bool:
+        """True if a resign/abort button is currently visible (game in progress)."""
+        return False
 
     # -----------------------------------------------------------------------
     # Abstract interface

@@ -98,6 +98,11 @@ class OverlayScreen(QWidget):
 
         # A list of QPolygon objects containing the points of the arrows
         self.arrows = []
+
+        # PV / threat lines (engine analysis): raw UCIs resolved at paint time
+        # so they track the latest board_position / orientation.
+        self._pv_ucis: list[str] = []
+        self._threat_uci: str = ""
         
         # Evaluation bar properties
         self.eval_bar_visible = False
@@ -165,6 +170,7 @@ class OverlayScreen(QWidget):
                     continue
                 if isinstance(message, proto.OverlayClear):
                     self.set_arrows([])
+                    self.set_pv_lines([], "")
                     continue
                 if isinstance(message, proto.OverlayEval):
                     if message.board_position is not None:
@@ -174,11 +180,22 @@ class OverlayScreen(QWidget):
                         self.is_white = message.is_white
                     self.update_eval_bar(message.eval_value, message.eval_type)
                     continue
+                if isinstance(message, proto.OverlayLines):
+                    ucis = [entry.get("uci", "") for entry in (message.lines or []) if isinstance(entry, dict)]
+                    self.set_pv_lines([u for u in ucis if u], message.threat_uci or "")
+                    continue
             except Exception:
                 pass
             if isinstance(message, list):
                 # Arrow data (legacy)
                 self.set_arrows(message)
+            elif isinstance(message, dict) and "pv_lines" in message:
+                # PV / threat lines (legacy dict form of OverlayLines)
+                try:
+                    ucis = [entry.get("uci", "") for entry in (message.get("pv_lines") or []) if isinstance(entry, dict)]
+                    self.set_pv_lines([u for u in ucis if u], message.get("threat_uci") or "")
+                except Exception:
+                    pass
             elif isinstance(message, dict) and "eval" in message:
                 # Evaluation data (legacy)
                 eval_value = message["eval"]
@@ -256,21 +273,85 @@ class OverlayScreen(QWidget):
             self.arrows.append(poly)
         self.update()
 
+    # -- PV / threat lines (engine analysis) --
+
+    def set_pv_lines(self, ucis: list, threat_uci: str = ""):
+        """Store PV + threat UCIs; resolved to pixels at paint time."""
+        try:
+            self._pv_ucis = [u for u in (ucis or []) if isinstance(u, str) and len(u) >= 4]
+        except Exception:
+            self._pv_ucis = []
+        self._threat_uci = threat_uci if isinstance(threat_uci, str) else ""
+        self.update()
+
+    def _square_center(self, sq: str):
+        """Pixel center of a square like 'e4' using board_position/is_white."""
+        if not self.board_position:
+            return None
+        try:
+            f = ord(sq[0]) - ord("a")
+            r = int(sq[1]) - 1
+            if not (0 <= f <= 7 and 0 <= r <= 7):
+                return None
+            sq_w = self.board_position["width"] / 8.0
+            sq_h = self.board_position["height"] / 8.0
+            col = f if self.is_white else 7 - f
+            row = (7 - r) if self.is_white else r
+            dpr = getattr(self, "_dpr", 1.0) or 1.0
+            x = (self.board_position["x"] + col * sq_w + sq_w / 2) * dpr
+            y = (self.board_position["y"] + row * sq_h + sq_h / 2) * dpr
+            return QPoint(int(x), int(y))
+        except Exception:
+            return None
+
+    def _uci_polygon(self, uci: str, height: int = 18):
+        try:
+            if not uci or len(uci) < 4:
+                return None
+            start = self._square_center(uci[0:2])
+            end = self._square_center(uci[2:4])
+            if start is None or end is None:
+                return None
+            return self.get_arrow_polygon(start, end, arrow_height=height)
+        except Exception as e:
+            logger.debug("_uci_polygon error: %s", e)
+            return None
+
     def paintEvent(self, event):
         super().paintEvent(event)
         painter = QPainter(self)
-        
+
         # Respect opacity for arrows as well
         # Draw arrows
         painter.setPen(QPen(Qt.GlobalColor.red, 1, Qt.PenStyle.NoPen))
         painter.setBrush(QBrush(QColor(255, 0, 0, 122), Qt.BrushStyle.SolidPattern))
         for arrow in self.arrows:
             painter.drawPolygon(arrow)
-        
+
+        # Draw PV lines (thinner, distinct colors, skip best-move duplicate)
+        pv_colors = [QColor(80, 140, 255, 150), QColor(80, 200, 120, 150),
+                     QColor(180, 130, 255, 150), QColor(255, 200, 80, 150)]
+        try:
+            for i, uci in enumerate(getattr(self, "_pv_ucis", []) or []):
+                poly = self._uci_polygon(uci, height=16)
+                if poly is None:
+                    continue
+                painter.setBrush(QBrush(pv_colors[i % len(pv_colors)], Qt.BrushStyle.SolidPattern))
+                painter.drawPolygon(poly)
+            # Threat arrow (opponent reply after null move) in orange
+            threat = getattr(self, "_threat_uci", "") or ""
+            if threat:
+                poly = self._uci_polygon(threat, height=16)
+                if poly is not None:
+                    painter.setBrush(QBrush(QColor(255, 140, 0, 170), Qt.BrushStyle.SolidPattern))
+                    painter.drawPolygon(poly)
+        except Exception as e:
+            logger.debug("PV paint error: %s", e)
+
         # Draw evaluation bar if visible
         if self.eval_bar_visible:
             self.draw_eval_bar(painter)
-        
+
         painter.end()
     
     def draw_eval_bar(self, painter):
@@ -370,12 +451,14 @@ class OverlayScreen(QWidget):
         painter.setPen(QPen(QColor(255, 255, 255)))
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, display_text)
 
-    def get_arrow_polygon(self, start_point, end_point):
+    def get_arrow_polygon(self, start_point, end_point, arrow_height=25):
         """
         This function is used to get the polygon for the arrow
         Args:
             start_point: The start point of the arrow
             end_point: The end point of the arrow
+            arrow_height: Width scale of the arrowhead/shaft (25 = best move,
+                smaller for secondary PV lines)
         Returns:
             A QPolygon object containing the points of the arrow
         """
@@ -392,8 +475,6 @@ class OverlayScreen(QWidget):
             # Get the perpendicular vector
             perp_x = -norm_y
             perp_y = norm_x
-
-            arrow_height = 25
             left_x = end_point.x() + arrow_height * norm_x * 1.5 + arrow_height * perp_x
             left_y = end_point.y() + arrow_height * norm_y * 1.5 + arrow_height * perp_y
 
