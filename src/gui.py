@@ -511,21 +511,17 @@ class GUI:
                 c.update_idletasks()
                 w = c.winfo_width()
                 if w < 10:
-                    # canvas not yet laid out – use inner eval_content width or fallback 280
                     try:
                         w = c.winfo_reqwidth() or 280
                     except:
                         w = 280
                     if w < 50:
                         w = 280
-                # ensure minimum
                 w = max(120, w)
             except Exception:
                 w = 280
             h = 6
-            # default center
             mid = w // 2
-            # map eval to offset: clamp +-10 pawns => full bar
             val = None
             color = TEXT_MUTED
             if eval_str.startswith("M"):
@@ -545,11 +541,9 @@ class GUI:
                 except (ValueError, TypeError) as e:
                     logger.debug("eval cp parse failed %r: %s", eval_str, e)
             if val is None:
-                # idle center tick
                 c.coords(self._eval_bar, mid-1, 0, mid+1, h)
                 c.itemconfig(self._eval_bar, fill="#B8B0A3")
             else:
-                # bar extends from center outward
                 if val >=0:
                     x0 = mid
                     x1 = mid + int((val/10)*(w//2 - 2))
@@ -1533,7 +1527,6 @@ class GUI:
                 pass
         if not path:
             return
-        # remember dir for next time
         try:
             self._last_export_dir = os.path.dirname(os.path.abspath(path)) or self._last_export_dir
         except Exception:
@@ -1616,7 +1609,6 @@ class GUI:
             if sp and not self._is_valid_stockfish(sp, quick_check=True):
                 logger.warning("Saved stockfish path looks invalid: %s", sp)
             # return as plain dict for backwards compat (tests expect dict)
-            # drop version from dict if caller expects old shape? keep it – harmless
             return d
         except Exception as e:
             logger.debug("_load_config via config_store failed: %s", e, exc_info=True)
@@ -2044,7 +2036,6 @@ class GUI:
         except Exception:
             pass
         logger.info("Stockfish path set to %s", f)
-        # Quick validation success already done
         try:
             import subprocess
             r = subprocess.run([self.stockfish_path, "uci"], input="quit\n", capture_output=True, text=True, timeout=3)

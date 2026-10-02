@@ -88,7 +88,6 @@ def test_move_executor_screen_mapping():
         def get_board(self): return FakeElem()
     ex_white = MoveExecutor(FakeGrabber(), True, 0.0)
     x, y = ex_white.move_to_screen_pos("e2")
-    # board at 100,100 size 800 -> square 100px, e2 white: x=100+100*4+50=550? Actually a=1 => e=5 => 100+400+50=550? With offset 100 => 650? Let's just check within bounds
     assert 100 < x < 900
     assert 100 < y < 900
     ex_black = MoveExecutor(FakeGrabber(), False, 0.0)

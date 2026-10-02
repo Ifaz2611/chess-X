@@ -322,7 +322,6 @@ class OverlayScreen(QWidget):
         painter = QPainter(self)
 
         # Respect opacity for arrows as well
-        # Draw arrows
         painter.setPen(QPen(Qt.GlobalColor.red, 1, Qt.PenStyle.NoPen))
         painter.setBrush(QBrush(QColor(255, 0, 0, 122), Qt.BrushStyle.SolidPattern))
         for arrow in self.arrows:
@@ -348,7 +347,6 @@ class OverlayScreen(QWidget):
         except Exception as e:
             logger.debug("PV paint error: %s", e)
 
-        # Draw evaluation bar if visible
         if self.eval_bar_visible:
             self.draw_eval_bar(painter)
 
@@ -416,7 +414,6 @@ class OverlayScreen(QWidget):
         painter.setBrush(QBrush(bottom_color))
         painter.drawRect(player_rect)
         
-        # Draw the center line
         center_y = self.eval_bar_y + (self.eval_bar_height // 2)
         painter.setPen(QPen(QColor(100, 100, 100, 150), 1))
         painter.drawLine(
@@ -426,15 +423,12 @@ class OverlayScreen(QWidget):
             center_y
         )
         
-        # Draw evaluation text
         painter.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         
-        # Format the display text
         display_text = self.eval_text
         if self.eval_type == "cp" and float(self.eval_value) > 0:
             display_text = "+" + display_text
             
-        # Position text at the bottom
         text_rect = QRect(
             self.eval_bar_x, 
             self.eval_bar_y + self.eval_bar_height - 20, 
@@ -442,12 +436,10 @@ class OverlayScreen(QWidget):
             20
         )
         
-        # Draw text background
         painter.setBrush(QBrush(QColor(60, 60, 60, 180)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRect(text_rect)
         
-        # Draw text
         painter.setPen(QPen(QColor(255, 255, 255)))
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, display_text)
 

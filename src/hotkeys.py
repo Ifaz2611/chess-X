@@ -1,19 +1,10 @@
-"""Hotkey handling extracted from gui.py (no behavior change).
-
-Provides HotkeyManager which polls keyboard (keyboard / pynput fallback) and
-triggers GUI actions (start/stop/kill/manual move). Also handles Linux
-permission warnings.
-"""
 from __future__ import annotations
 
 import time
 import threading
 import tkinter as tk
-
 from utilities import get_keyboard_handler, get_logger, check_linux_input_permissions, is_wayland
-
 logger = get_logger("hotkeys")
-
 
 class HotkeyManager:
     """Polls keyboard in a daemon thread and dispatches to GUI callbacks."""

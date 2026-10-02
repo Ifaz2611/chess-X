@@ -6,71 +6,47 @@ import time
 import atexit
 import threading
 from typing import Optional
-
 from selenium.common import WebDriverException
-
 from utilities import get_logger
 import logging
-# Don't spam pytest output when handler stream closed at shutdown
 logging.raiseExceptions = False
-
 logger = get_logger("browser_session")
-
 try:
     from browser_factory import create_driver, normalize_browser
-except Exception:  # fallback if factory not available
-    create_driver = None  # type: ignore
-    def normalize_browser(b):  # type: ignore
+except Exception:  
+    create_driver = None  
+    def normalize_browser(b):  
         return (b or "chrome").lower()
 
 try:
     from platform_info import is_macos, check_macos_chromedriver, check_macos_permissions
 except Exception:
-    def is_macos():  # type: ignore
+    def is_macos():  
         return platform.system() == "Darwin"
-    def check_macos_chromedriver():  # type: ignore
+    def check_macos_chromedriver():     
         return True, ""
-    def check_macos_permissions():  # type: ignore
+    def check_macos_permissions():  
         return True, ""
-
-
 class BrowserSessionManager:
-    """Owns a single WebDriver session (Chrome/Firefox/Edge)."""
-
     def __init__(self, browser: str = "chrome"):
         self.browser: str = normalize_browser(browser)
-        self.chrome: Optional[object] = None  # keep legacy attr name; holds any WebDriver
-        self.driver: Optional[object] = None  # alias
+        self.chrome: Optional[object] = None  
+        self.driver: Optional[object] = None  
         self.chrome_url: Optional[str] = None
         self.chrome_session_id: Optional[str] = None
         self.opened_browser: bool = False
         self.opening_browser: bool = False
         self._lock = threading.Lock()
         atexit.register(self.close)
-
     @property
     def current_browser(self) -> str:
         return self.browser
-
-    # --- creation ---
     def open(self, website: str, browser: Optional[str] = None) -> bool:
-        """Blocking open – delegates to browser_factory.
-
-        Args:
-            website: "chesscom" or "lichess" (determines target URL)
-            browser: override browser id (chrome|firefox|edge). If None, uses
-                     instance default or CHESSX_BROWSER env.
-        """
-        # Allow per-call browser override
         if browser is not None:
             self.browser = normalize_browser(browser)
         else:
-            # Also respect env if instance default is chrome and env sets otherwise
             env_b = os.environ.get("CHESSX_BROWSER")
             if env_b and self.browser == "chrome":
-                # Only override if caller didn't explicitly pick via config
-                # We check if BrowserSessionManager was constructed with default
-                # vs explicit – here we just honor env
                 self.browser = normalize_browser(env_b)
 
         with self._lock:
@@ -78,8 +54,6 @@ class BrowserSessionManager:
                 logger.debug("Browser open requested but already opening/opened")
                 return False
             self.opening_browser = True
-
-        # macOS pre-flight hints
         if is_macos():
             ok, msg = check_macos_permissions()
             if not ok:
@@ -88,8 +62,6 @@ class BrowserSessionManager:
                 logger.debug("macOS permissions: %s", msg)
             _, hint = check_macos_chromedriver()
             logger.info(hint)
-
-        # Create driver via factory (or legacy fallback)
         driver = None
         if create_driver is not None:
             try:
@@ -102,7 +74,6 @@ class BrowserSessionManager:
                     self.opening_browser = False
                 return False
         else:
-            # Legacy Chrome-only fallback (should not happen after factory added)
             from selenium import webdriver
             from selenium.webdriver.chrome.service import Service as ChromeService
             from webdriver_manager.chrome import ChromeDriverManager
@@ -156,7 +127,6 @@ class BrowserSessionManager:
         try:
             target = "https://www.chess.com" if website == "chesscom" else "https://www.lichess.org"
             driver.get(target)
-            # Extract executor URL / session id
             try:
                 if getattr(driver, "service", None) and getattr(driver.service, "service_url", None):
                     chrome_url = driver.service.service_url
@@ -198,7 +168,7 @@ class BrowserSessionManager:
         if not self.opened_browser or self.chrome is None:
             return False
         try:
-            _ = self.chrome.current_url  # type: ignore
+            _ = self.chrome.current_url 
             return True
         except WebDriverException as e:
             msg = str(e).lower()
@@ -211,7 +181,6 @@ class BrowserSessionManager:
             return False
 
     def check_driver_log_for_close(self) -> bool:
-        """Return True if driver log indicates window closed."""
         if not self.opened_browser or self.chrome is None:
             return False
         try:
@@ -228,7 +197,7 @@ class BrowserSessionManager:
         with self._lock:
             if self.chrome is not None:
                 try:
-                    self.chrome.quit()  # type: ignore
+                    self.chrome.quit()
                 except Exception as e:
                     logger.debug("chrome.quit error: %s", e)
                 self.chrome = None
@@ -240,9 +209,7 @@ class BrowserSessionManager:
         try:
             logger.info("BrowserSessionManager closed")
         except ValueError:
-            pass  # stream closed at interpreter shutdown (pytest atexit)
-
-    # context manager support
+            pass
     def __enter__(self):
         return self
 
