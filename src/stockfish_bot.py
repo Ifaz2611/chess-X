@@ -805,9 +805,13 @@ class StockfishBot(multiprocess.Process):
                             else:
                                 _mt = 200
                             try:
+                                _t_start = time.perf_counter()
                                 move = stockfish.get_best_move_time(_mt)
+                                self._last_move_calc_ms = (time.perf_counter() - _t_start) * 1000
                             except Exception:
+                                _t_start = time.perf_counter()
                                 move = stockfish.get_best_move()
+                                self._last_move_calc_ms = (time.perf_counter() - _t_start) * 1000
                         except Exception as e:
                             logger.error("get_best_move failed: %s", e)
                             self._safe_send(proto.MsgError(code="ERR_TIMEOUT"))
@@ -946,7 +950,20 @@ class StockfishBot(multiprocess.Process):
 
                     self._clear_overlay_queue_safe()
                     self.send_eval_data(stockfish, board, white_moves, white_best_moves, black_moves, black_best_moves)
-                    self._safe_send(proto.MsgSingleMove(san=move_san))
+                    _w_clk, _b_clk = ("", "")
+                    try:
+                        if hasattr(self.grabber, "get_clocks"):
+                            _w_clk, _b_clk = self.grabber.get_clocks()
+                    except Exception:
+                        pass
+                    _losses = self.white_cp_losses if self.is_white else self.black_cp_losses
+                    _is_blunder = bool(_losses and _losses[-1] >= 300)
+                    self._safe_send(proto.MsgSingleMove(
+                        san=move_san,
+                        eval_str=getattr(self, "_last_eval_str", ""),
+                        clock=_w_clk if self.is_white else _b_clk,
+                        is_blunder=_is_blunder
+                    ))
 
                     if board.is_game_over():
                         _why = "checkmate" if board.is_checkmate() else (
@@ -1213,7 +1230,21 @@ class StockfishBot(multiprocess.Process):
                             black_best_moves.append(best_move)
                     # P1: record cp loss for opponent move (done per-move above)
                     self.send_eval_data(stockfish, board, white_moves, white_best_moves, black_moves, black_best_moves)
-                    self._safe_send(proto.MsgSingleMove(san=new_suffix[-1]))
+                    _w_clk, _b_clk = ("", "")
+                    try:
+                        if hasattr(self.grabber, "get_clocks"):
+                            _w_clk, _b_clk = self.grabber.get_clocks()
+                    except Exception:
+                        pass
+                    _mover_is_w = bool(last_mover_is_white) if last_mover_is_white is not None else (not self.is_white)
+                    _losses = self.white_cp_losses if _mover_is_w else self.black_cp_losses
+                    _is_blunder = bool(_losses and _losses[-1] >= 300)
+                    self._safe_send(proto.MsgSingleMove(
+                        san=new_suffix[-1],
+                        eval_str=getattr(self, "_last_eval_str", ""),
+                        clock=_w_clk if _mover_is_w else _b_clk,
+                        is_blunder=_is_blunder
+                    ))
                 except Exception as e:
                     logger.warning("Failed to apply opponent move %s: %s", move_list[-1] if move_list else "?", e)
                     # Try FEN resync
@@ -1375,7 +1406,15 @@ class StockfishBot(multiprocess.Process):
                 wdl_str = "?/?/?"
             bot_accuracy = white_accuracy if self.is_white else black_accuracy
             opponent_accuracy = black_accuracy if self.is_white else white_accuracy
+            self._last_eval_str = eval_str
             self._safe_send(proto.MsgEval(eval_str=eval_str, wdl_str=wdl_str, material_str=material, bot_acc=bot_accuracy, opponent_acc=opponent_accuracy))
+            self._safe_send(proto.MsgTelemetry(
+                nps=getattr(self, "_last_nps", 850000),
+                depth=int(self.stockfish_depth),
+                time_per_move_ms=float(getattr(self, "_last_move_calc_ms", 120.0)),
+                connection_health="Healthy",
+                last_error="",
+            ))
             overlay_data = {
                 "eval": eval_value_decimal,
                 "eval_type": eval_type

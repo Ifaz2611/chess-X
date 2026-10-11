@@ -95,6 +95,7 @@ class OverlayScreen(QWidget):
         # Opacity / visibility controls (P2 overlay toggle)
         self._opacity = 1.0  # 0.0-1.0
         self._visible = True  # hotkey toggle
+        self.eval_bar_side = "left"  # "left" or "right" side of board
 
         # A list of QPolygon objects containing the points of the arrows
         self.arrows = []
@@ -136,6 +137,13 @@ class OverlayScreen(QWidget):
         self.setWindowOpacity(self._opacity)
         self.update()
 
+    def set_visibility(self, visible: bool):
+        """Explicitly show or hide overlay."""
+        self._visible = bool(visible)
+        self.setVisible(self._visible)
+        if self._visible:
+            self.update()
+
     def toggle_visibility(self):
         """Toggle overlay hidden/shown (for hotkey)."""
         self._visible = not self._visible
@@ -143,6 +151,12 @@ class OverlayScreen(QWidget):
         if self._visible:
             self.update()
         logger.info("Overlay visibility toggled: %s", self._visible)
+
+    def set_eval_bar_side(self, side: str):
+        """Set eval bar side ('left' or 'right')."""
+        self.eval_bar_side = "right" if str(side).lower() == "right" else "left"
+        self.update_eval_bar_position()
+        self.update()
 
     def message_queue_thread_fn(self):
         """
@@ -154,17 +168,30 @@ class OverlayScreen(QWidget):
             message = self.stockfish_queue.get()
             # Check for opacity/toggle commands (dict with keys)
             try:
-                if isinstance(message, dict) and "overlay_opacity" in message:
-                    self.set_opacity(float(message["overlay_opacity"]))
-                    continue
-                if isinstance(message, dict) and message.get("overlay_toggle"):
-                    self.toggle_visibility()
-                    continue
+                if isinstance(message, dict):
+                    if "overlay_opacity" in message:
+                        self.set_opacity(float(message["overlay_opacity"]))
+                    if "eval_bar_side" in message:
+                        self.set_eval_bar_side(message["eval_bar_side"])
+                    if "overlay_visible" in message:
+                        self.set_visibility(bool(message["overlay_visible"]))
+                    if message.get("overlay_toggle"):
+                        self.toggle_visibility()
+                    if "overlay_opacity" in message or "eval_bar_side" in message or "overlay_visible" in message or message.get("overlay_toggle"):
+                        continue
             except Exception:
                 pass
             # Typed overlay messages first (no behavior change, just new types)
             try:
                 import protocol as proto  # lazy to avoid circular import at top
+                if isinstance(message, proto.OverlayConfig):
+                    if message.opacity is not None:
+                        self.set_opacity(message.opacity)
+                    if message.side is not None:
+                        self.set_eval_bar_side(message.side)
+                    if message.visible is not None:
+                        self.set_visibility(message.visible)
+                    continue
                 if isinstance(message, proto.OverlayArrows):
                     self.set_arrows(message.arrows)
                     continue
@@ -219,8 +246,15 @@ class OverlayScreen(QWidget):
         if not self.board_position:
             return
             
-        # Position the eval bar to the left of the board with a small margin
-        self.eval_bar_x = self.board_position['x'] - self.eval_bar_width - self.eval_bar_margin
+        # Position the eval bar to either left or right of the board with margin
+        if getattr(self, "eval_bar_side", "left") == "right":
+            self.eval_bar_x = self.board_position['x'] + self.board_position['width'] + self.eval_bar_margin
+        else:
+            self.eval_bar_x = self.board_position['x'] - self.eval_bar_width - self.eval_bar_margin
+        
+        # Make the eval bar the exact same height as the board
+        self.eval_bar_height = self.board_position['height']
+        self.eval_bar_y = self.board_position['y']
         
         # Make the eval bar the exact same height as the board
         self.eval_bar_height = self.board_position['height']

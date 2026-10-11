@@ -246,6 +246,10 @@ class Grabber(ABC):
         except Exception:
             return ""
 
+    def get_clocks(self) -> tuple[str, str]:
+        """Return (white_clock, black_clock) if visible, or ('', '')."""
+        return "", ""
+
     def detect_variant(self) -> str:
         """Detect chess variant from URL + page text. Returns 'standard' by default.
 

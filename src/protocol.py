@@ -27,12 +27,18 @@ class MsgSingleMove:
     """Single SAN move played (bot or opponent)."""
     san: str
     kind: Literal["S_MOVE"] = "S_MOVE"
+    eval_str: str = ""
+    clock: str = ""
+    is_blunder: bool = False
 
 @dataclass(frozen=True)
 class MsgMultiMove:
     """Bulk move list (e.g., initial sync)."""
     sans: List[str]
     kind: Literal["M_MOVE"] = "M_MOVE"
+    evals: Optional[List[str]] = None
+    clocks: Optional[List[str]] = None
+    blunders: Optional[List[bool]] = None
 
 @dataclass(frozen=True)
 class MsgEval:
@@ -52,13 +58,23 @@ class MsgPV:
     kind: Literal["PV"] = "PV"
 
 @dataclass(frozen=True)
+class MsgTelemetry:
+    """Live engine and system telemetry."""
+    nps: int = 0
+    depth: int = 0
+    time_per_move_ms: float = 0.0
+    connection_health: str = "Connected"
+    last_error: str = ""
+    kind: Literal["TELEMETRY"] = "TELEMETRY"
+
+@dataclass(frozen=True)
 class MsgError:
     """Error / warning to show in GUI."""
     code: str  # e.g. "ERR_BOARD", "ERR_COLOR", "ERR_MOVES", "ERR_GAMEOVER", "ERR_TIMEOUT", "ERR_DISCONNECT", "ERR_STALE", "ERR_ENGINE", "ERR_EXE", "ERR_PERM"
     detail: str = ""
     kind: Literal["ERROR"] = "ERROR"
 
-BotToGuiMessage = Union[MsgStart, MsgRestart, MsgSingleMove, MsgMultiMove, MsgEval, MsgPV, MsgError]
+BotToGuiMessage = Union[MsgStart, MsgRestart, MsgSingleMove, MsgMultiMove, MsgEval, MsgPV, MsgTelemetry, MsgError]
 GuiToBotMessage = Union[MsgDelete]
 PipeMessage = Union[BotToGuiMessage, GuiToBotMessage, str]  # str for legacy fallback
 
@@ -93,11 +109,19 @@ class OverlayLines:
     kind: Literal["LINES"] = "LINES"
 
 @dataclass(frozen=True)
+class OverlayConfig:
+    """Config update for overlay process: opacity, side ('left'|'right'), visibility."""
+    opacity: Optional[float] = None
+    side: Optional[str] = None
+    visible: Optional[bool] = None
+    kind: Literal["OVERLAY_CONFIG"] = "OVERLAY_CONFIG"
+
+@dataclass(frozen=True)
 class OverlayClear:
     """Clear overlay arrows."""
     kind: Literal["CLEAR"] = "CLEAR"
 
-OverlayMessage = Union[OverlayArrows, OverlayEval, OverlayLines, OverlayClear, List[Any], Dict[str, Any]]  # legacy list/dict fallback
+OverlayMessage = Union[OverlayArrows, OverlayEval, OverlayLines, OverlayConfig, OverlayClear, List[Any], Dict[str, Any]]  # legacy list/dict fallback
 
 
 # ---------- Serialization for legacy string protocol ----------
@@ -116,6 +140,8 @@ def bot_msg_to_legacy(msg: BotToGuiMessage) -> str:
         return f"EVAL|{msg.eval_str}|{msg.wdl_str}|{msg.material_str}|{msg.bot_acc}|{msg.opponent_acc}"
     if isinstance(msg, MsgPV):
         return f"PV|{msg.pv_text}|{msg.threat_san}"
+    if isinstance(msg, MsgTelemetry):
+        return f"TELEMETRY|{msg.nps}|{msg.depth}|{msg.time_per_move_ms}|{msg.connection_health}|{msg.last_error}"
     if isinstance(msg, MsgError):
         if msg.detail:
             return f"{msg.code}|{msg.detail}" if "|" not in msg.code else f"{msg.code}{msg.detail}"
@@ -146,6 +172,13 @@ def legacy_to_bot_msg(s: str) -> BotToGuiMessage | str:
         parts = s.split("|")
         if len(parts) >= 2:
             return MsgPV(pv_text=parts[1], threat_san=parts[2] if len(parts) > 2 else "")
+    if s.startswith("TELEMETRY|"):
+        parts = s.split("|")
+        if len(parts) >= 6:
+            try:
+                return MsgTelemetry(nps=int(parts[1]), depth=int(parts[2]), time_per_move_ms=float(parts[3]), connection_health=parts[4], last_error=parts[5])
+            except Exception:
+                pass
     if s.startswith("ERR_"):
         # ERR_CODE|detail or ERR_CODE
         if "|" in s:

@@ -604,3 +604,29 @@ class LichessGrabber(Grabber):
                 logger.debug("make_mouseless_move attempt %d failed: %s", attempt, e)
                 time.sleep(0.2)
                 continue
+
+    def get_clocks(self) -> tuple[str, str]:
+        """Extract clocks from lichess UI: (white_clock, black_clock)."""
+        try:
+            js = """
+            try {
+                var top = document.querySelector('.rclock-top .time, .rclock.rclock-top .time');
+                var bot = document.querySelector('.rclock-bottom .time, .rclock.rclock-bottom .time');
+                if (top && bot) {
+                    return [top.innerText.trim(), bot.innerText.trim()];
+                }
+                var times = document.querySelectorAll('.rclock .time');
+                if (times.length >= 2) {
+                    return [times[0].innerText.trim(), times[1].innerText.trim()];
+                }
+            } catch(e) {}
+            return [];
+            """
+            res = self.chrome.execute_script(js)
+            if res and len(res) >= 2:
+                is_w = self.is_white()
+                top_clk, bot_clk = str(res[0]), str(res[1])
+                return (bot_clk, top_clk) if is_w else (top_clk, bot_clk)
+        except Exception:
+            pass
+        return "", ""

@@ -70,6 +70,12 @@ class HotkeyManager:
                     except Exception:
                         self.gui.on_stop_button_listener()
                     time.sleep(0.5)
+                elif self._kb.is_pressed("3") or self._kb.is_pressed("o"):
+                    try:
+                        self.gui.master.after(0, self.gui.toggle_overlay)
+                    except Exception:
+                        self.gui.toggle_overlay()
+                    time.sleep(0.5)
             except Exception as e:
                 logger.debug("keypress poll error: %s", e)
                 time.sleep(0.3)

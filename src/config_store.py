@@ -36,6 +36,9 @@ DEFAULTS: dict[str, Any] = {
     "pv_lines_count": 3,
     "auto_save_pgn": False,
     "pgn_games_dir": "games",
+    "overlay_opacity": 1.0,
+    "overlay_eval_side": "left",
+    "overlay_visible": True,
 }
 
 # Fields that are not part of current schema but were present in old configs
@@ -65,6 +68,9 @@ class Config:
     pv_lines_count: int = 3
     auto_save_pgn: bool = False
     pgn_games_dir: str = "games"
+    overlay_opacity: float = 1.0
+    overlay_eval_side: str = "left"
+    overlay_visible: bool = True
 
     @classmethod
     def defaults(cls) -> Config:
@@ -190,6 +196,19 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
         out["pv_lines_count"] = max(1, min(5, int(out["pv_lines_count"])))
     except Exception:
         out["pv_lines_count"] = int(DEFAULTS["pv_lines_count"])
+    try:
+        out["overlay_opacity"] = max(0.1, min(1.0, float(out.get("overlay_opacity", 1.0))))
+    except Exception:
+        out["overlay_opacity"] = 1.0
+    try:
+        s = str(out.get("overlay_eval_side", "left")).lower().strip()
+        out["overlay_eval_side"] = "right" if s == "right" else "left"
+    except Exception:
+        out["overlay_eval_side"] = "left"
+    try:
+        out["overlay_visible"] = bool(out.get("overlay_visible", True))
+    except Exception:
+        out["overlay_visible"] = True
     out["version"] = CONFIG_VERSION
     return out
 

@@ -358,6 +358,31 @@ class GUI:
         self.topmost_check_button = self._check(misc, "Keep window on top", self.enable_topmost, self.on_topmost_check_button_listener)
         self.topmost_check_button.pack(fill="x", pady=(10, 0))
 
+        overlay_card = self._card(parent, "Overlay & Visuals")
+        self.overlay_opacity = tk.DoubleVar(value=1.0)
+        self._scale_row(overlay_card, "Opacity", self.overlay_opacity, 0.1, 1.0, "overlay_opacity_scale")
+        try:
+            self.overlay_opacity.trace_add("write", lambda *_: self.on_overlay_opacity_change())
+        except Exception:
+            try:
+                self.overlay_opacity.trace("w", lambda *_: self.on_overlay_opacity_change())
+            except Exception:
+                pass
+
+        self.overlay_eval_side = tk.StringVar(value="left")
+        side_row = tk.Frame(overlay_card, bg=BG_ELEVATED)
+        side_row.pack(fill="x", pady=(8, 6))
+        tk.Label(side_row, text="Eval Bar Side", font=self.F_SMALL, fg=TEXT_MUTED, bg=BG_ELEVATED).pack(side="left", padx=(8, 4))
+        for val, label in [("left", "Left"), ("right", "Right")]:
+            rb = tk.Radiobutton(side_row, text=label, variable=self.overlay_eval_side, value=val, indicatoron=0,
+                                bg=BG_ELEVATED, fg="#000000", selectcolor=ACCENT,
+                                activebackground=BG_ELEVATED, relief="flat", bd=0, pady=4, padx=8,
+                                command=self.on_overlay_side_toggle)
+            rb.pack(side="left", fill="x", expand=True, padx=1)
+
+        self.toggle_overlay_button = self._button(overlay_card, "TOGGLE OVERLAY  (O)", self.toggle_overlay, BG_ELEVATED)
+        self.toggle_overlay_button.pack(fill="x", pady=(4, 0))
+
     def _entry_row(self, parent, label, variable, attr, minimum, maximum):
         row = tk.Frame(parent, bg=BG_CARD)
         row.pack(fill="x", pady=4)
@@ -402,12 +427,22 @@ class GUI:
         self.tree.column("black", width=150, anchor="center")
         self.tree.tag_configure("odd", background="#F7F4EF")
         self.tree.tag_configure("even", background=BG_CARD)
+        self.tree.tag_configure("blunder", foreground="#DC2626", font=("Segoe UI", 9, "bold"))
+        self.tree.bind("<Button-3>", self._on_tree_context_menu)
+        self.tree.bind("<Button-2>", self._on_tree_context_menu)
         self.vsb = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview, style="Dark.Vertical.TScrollbar")
         self.tree.configure(yscrollcommand=self.vsb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         self.vsb.pack(side="right", fill="y")
-        self.export_pgn_button = self._button(parent, "EXPORT PGN", self.on_export_pgn_button_listener, BG_ELEVATED)
-        self.export_pgn_button.pack(fill="x", padx=16, pady=(0, 12))
+
+        btn_bar = tk.Frame(parent, bg=BG_CARD)
+        btn_bar.pack(fill="x", padx=16, pady=(0, 12))
+        self.export_pgn_button = self._button(btn_bar, "EXPORT PGN", self.on_export_pgn_button_listener, BG_ELEVATED)
+        self.export_pgn_button.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.copy_pgn_button = self._button(btn_bar, "COPY PGN", self.on_copy_pgn_button_listener, BG_ELEVATED)
+        self.copy_pgn_button.pack(side="left", fill="x", expand=True, padx=2)
+        self.copy_fen_button = self._button(btn_bar, "COPY FEN", self.on_copy_fen_button_listener, BG_ELEVATED)
+        self.copy_fen_button.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         eval_box = tk.Frame(parent, bg="#F8F6F1", highlightbackground=BORDER, highlightthickness=1)
         eval_box.pack(fill="x", padx=16, pady=(0, 16))
@@ -426,6 +461,21 @@ class GUI:
         self.pv_text = tk.Label(eval_box, text="", font=("Consolas", 8), fg=TEXT_MUTED,
                                 bg="#F8F6F1", wraplength=300, justify="left")
         self.pv_text.pack(anchor="w", padx=12, pady=(0, 10))
+
+        telemetry_box = tk.Frame(parent, bg="#F8F6F1", highlightbackground=BORDER, highlightthickness=1)
+        telemetry_box.pack(fill="x", padx=16, pady=(0, 16))
+        tk.Label(telemetry_box, text="STATUS & TELEMETRY", font=("Segoe UI", 8, "bold"), fg=TEXT_MUTED, bg="#F8F6F1").pack(anchor="w", padx=12, pady=(10, 5))
+        tel_stats = tk.Frame(telemetry_box, bg="#F8F6F1")
+        tel_stats.pack(fill="x", padx=12, pady=(0, 6))
+        self.nps_text = self._stat(tel_stats, "NPS")
+        self.depth_reached_text = self._stat(tel_stats, "DEPTH")
+        self.move_time_text = self._stat(tel_stats, "TIME/MOVE")
+        self.conn_health_text = self._stat(tel_stats, "HEALTH")
+        err_frame = tk.Frame(telemetry_box, bg="#F8F6F1")
+        err_frame.pack(fill="x", padx=12, pady=(0, 10))
+        tk.Label(err_frame, text="LAST ERROR", font=("Segoe UI", 7), fg=TEXT_MUTED, bg="#F8F6F1").pack(anchor="w")
+        self.last_error_text = tk.Label(err_frame, text="None (nominal)", font=self.F_SMALL, fg=TEXT_MUTED, bg="#F8F6F1", anchor="w")
+        self.last_error_text.pack(fill="x")
 
     def _stat(self, parent, name):
         box = tk.Frame(parent, bg="#F8F6F1")
@@ -915,14 +965,14 @@ class GUI:
                     return
                 elif isinstance(data, proto.MsgSingleMove):
                     self.match_moves.append(data.san)
-                    self.insert_move(data.san)
+                    self.insert_move(data.san, eval_str=data.eval_str, clock=data.clock, is_blunder=data.is_blunder)
                     self.tree.yview_moveto(1)
                     try: self._move_count.configure(text=f"{len(self.match_moves)} moves")
                     except: pass
                     return
                 elif isinstance(data, proto.MsgMultiMove):
                     self.match_moves += data.sans
-                    self.set_moves(data.sans)
+                    self.set_moves(data.sans, evals=data.evals, clocks=data.clocks, blunders=data.blunders)
                     self.tree.yview_moveto(1)
                     try: self._move_count.configure(text=f"{len(self.match_moves)} moves")
                     except: pass
@@ -933,9 +983,19 @@ class GUI:
                 elif isinstance(data, proto.MsgPV):
                     self.update_pv_display(data.pv_text, data.threat_san)
                     return
+                elif isinstance(data, proto.MsgTelemetry):
+                    self.update_telemetry(data.nps, data.depth, data.time_per_move_ms, data.connection_health, data.last_error)
+                    return
                 elif isinstance(data, proto.MsgError):
                     code = data.code
                     detail = data.detail
+                    err_msg = f"{code}: {detail}" if detail else code
+                    if hasattr(self, "last_error_text"):
+                        try: self.last_error_text.configure(text=err_msg, fg=DANGER)
+                        except Exception: pass
+                    if hasattr(self, "conn_health_text"):
+                        try: self.conn_health_text.configure(text="WARNING", fg=WARNING)
+                        except Exception: pass
                     # dispatch to legacy handlers below via code
                     data = code + (f"|{detail}" if detail else "")
                     # fall through to string handling by reassigning and continuing
@@ -996,6 +1056,13 @@ class GUI:
                 parts = data.split("|")
                 self.update_pv_display(parts[1] if len(parts) > 1 else "",
                                        parts[2] if len(parts) > 2 else "")
+            elif data.startswith("TELEMETRY|"):
+                parts = data.split("|")
+                if len(parts) >= 6:
+                    try:
+                        self.update_telemetry(int(parts[1]), int(parts[2]), float(parts[3]), parts[4], parts[5])
+                    except Exception:
+                        pass
             elif data.startswith("ERR_EXE"):
                 messagebox.showerror("Error", "Stockfish path provided is not valid!")
                 logger.error("ERR_EXE: invalid stockfish path")
@@ -1591,18 +1658,6 @@ class GUI:
             except Exception:
                 explicit = None
             cfg = _load(explicit) if explicit else _load()
-            # if explicit path missing and generic load returned defaults, try fallback candidate search
-            # (keeps old behavior of checking config.json, ~/.chess-x.json)
-            if explicit and not os.path.exists(explicit):
-                # explicit missing – try generic load as fallback (old code checked multiple candidates)
-                try:
-                    from config_store import load_config as _load2
-                    cfg2 = _load2()
-                    # if cfg2 is non-default (has non-empty website etc), prefer it
-                    if cfg2.to_dict() != cfg.to_dict():
-                        cfg = cfg2
-                except Exception:
-                    pass
             d = cfg.to_dict()
             # extra GUI-level check: quick stockfish validity warning (keep path if custom name)
             sp = d.get("stockfish_path")
@@ -1647,6 +1702,8 @@ class GUI:
                 kw["skill_level"] = int(self.skill_level.get()) if hasattr(self, "skill_level") else 20
                 kw["stockfish_depth"] = int(self.stockfish_depth.get()) if hasattr(self, "stockfish_depth") else 13
                 kw["enable_topmost"] = int(self.enable_topmost.get()) if hasattr(self, "enable_topmost") else 1
+                kw["overlay_opacity"] = float(self.overlay_opacity.get()) if hasattr(self, "overlay_opacity") else 1.0
+                kw["overlay_eval_side"] = str(self.overlay_eval_side.get()) if hasattr(self, "overlay_eval_side") else "left"
             except Exception as e:
                 logger.debug("_save_config collect error: %s", e)
             cfg = _Cfg.from_dict(kw)
@@ -1708,6 +1765,12 @@ class GUI:
                     try:
                         self.master.attributes("-topmost", bool(int(cfg["enable_topmost"])))
                     except Exception: pass
+                except Exception: pass
+            if "overlay_opacity" in cfg and hasattr(self, "overlay_opacity"):
+                try: self.overlay_opacity.set(float(cfg["overlay_opacity"]))
+                except Exception: pass
+            if "overlay_eval_side" in cfg and hasattr(self, "overlay_eval_side"):
+                try: self.overlay_eval_side.set(str(cfg["overlay_eval_side"]))
                 except Exception: pass
             # need to refresh manual mode visibility and radio highlights
             try: self.on_manual_mode_checkbox_listener()
@@ -2067,7 +2130,7 @@ class GUI:
         except Exception as e:
             logger.debug("clear_tree error: %s", e, exc_info=True)
 
-    def insert_move(self, move):
+    def insert_move(self, move, eval_str="", clock="", is_blunder=False):
         try:
             # Use match_moves length which already includes this move (caller appends before call).
             # move_index is 1-based count of moves.
@@ -2075,23 +2138,36 @@ class GUI:
             if move_index == 0:
                 logger.warning("insert_move called with empty match_moves for move %r", move)
                 return
+            formatted_move = str(move)
+            if is_blunder and "??" not in formatted_move:
+                formatted_move += " ??"
+            extras = []
+            if eval_str:
+                extras.append(eval_str if eval_str.startswith(("+", "-", "M")) else f"+{eval_str}")
+            if clock:
+                extras.append(clock)
+            if extras:
+                formatted_move += f" ({' · '.join(extras)})"
+
+            row_tag = "blunder" if is_blunder else ("even" if ((move_index + 1) // 2 - 1) % 2 == 0 else "odd")
+
             if move_index % 2 == 1:
                 # White move -> new row
                 row_number = (move_index + 1) // 2
-                tag = "even" if (row_number - 1) % 2 == 0 else "odd"
-                self.tree.insert("", "end", values=(row_number, move, ""), tags=(tag,))
+                self.tree.insert("", "end", values=(row_number, formatted_move, ""), tags=(row_tag,))
             else:
                 # Black move -> fill last row's black column
                 children = self.tree.get_children()
                 if not children:
                     # Recovery: no row exists (e.g., after clear) – create it with empty white
                     row_number = move_index // 2
-                    tag = "even" if (row_number - 1) % 2 == 0 else "odd"
                     logger.debug("insert_move recovery: no row for black move %r", move)
-                    self.tree.insert("", "end", values=(row_number, "", move), tags=(tag,))
+                    self.tree.insert("", "end", values=(row_number, "", formatted_move), tags=(row_tag,))
                 else:
                     row = children[-1]
-                    self.tree.set(row, "black", move)
+                    self.tree.set(row, "black", formatted_move)
+                    if is_blunder:
+                        self.tree.item(row, tags=("blunder",))
             try:
                 self.tree.update_idletasks()
                 self.tree.yview_moveto(1.0)
@@ -2106,7 +2182,7 @@ class GUI:
         except Exception as e:
             logger.debug("insert_move error: %s", e, exc_info=True)
 
-    def set_moves(self, moves):
+    def set_moves(self, moves, evals=None, clocks=None, blunders=None):
         try:
             self.clear_tree()
             # Build rows of 2 moves (white, black)
@@ -2114,7 +2190,32 @@ class GUI:
                 row_number = i // 2 + 1
                 white = moves[i] if i < len(moves) else ""
                 black = moves[i + 1] if i + 1 < len(moves) else ""
-                tag = "even" if (row_number - 1) % 2 == 0 else "odd"
+                w_blunder = bool(blunders[i]) if blunders and i < len(blunders) else False
+                b_blunder = bool(blunders[i + 1]) if blunders and i + 1 < len(blunders) else False
+
+                if white:
+                    if w_blunder and "??" not in white:
+                        white += " ??"
+                    w_extras = []
+                    if evals and i < len(evals) and evals[i]:
+                        w_extras.append(evals[i])
+                    if clocks and i < len(clocks) and clocks[i]:
+                        w_extras.append(clocks[i])
+                    if w_extras:
+                        white += f" ({' · '.join(w_extras)})"
+
+                if black:
+                    if b_blunder and "??" not in black:
+                        black += " ??"
+                    b_extras = []
+                    if evals and i + 1 < len(evals) and evals[i + 1]:
+                        b_extras.append(evals[i + 1])
+                    if clocks and i + 1 < len(clocks) and clocks[i + 1]:
+                        b_extras.append(clocks[i + 1])
+                    if b_extras:
+                        black += f" ({' · '.join(b_extras)})"
+
+                tag = "blunder" if (w_blunder or b_blunder) else ("even" if (row_number - 1) % 2 == 0 else "odd")
                 self.tree.insert("", "end", values=(row_number, white, black), tags=(tag,))
             try:
                 self.tree.update_idletasks()
@@ -2129,6 +2230,116 @@ class GUI:
             logger.debug("set_moves TclError: %s", e)
         except Exception as e:
             logger.debug("set_moves error: %s", e, exc_info=True)
+
+    def on_copy_pgn_button_listener(self):
+        try:
+            from pgn_export import build_pgn, default_headers
+            site = "lichess.org" if str(self.website.get()) == "lichess" else "chess.com"
+            headers = default_headers(site=site, white="Me", black="Opponent", result="*", event="Online Game")
+            data = build_pgn(list(self.match_moves), headers=headers, result="*")
+            self.master.clipboard_clear()
+            self.master.clipboard_append(data)
+            logger.info("Copied PGN to clipboard")
+            if hasattr(self, "copy_pgn_button"):
+                self._set_temp_button_feedback(self.copy_pgn_button, "COPIED!")
+        except Exception as e:
+            logger.debug("Copy PGN failed: %s", e)
+
+    def on_copy_fen_button_listener(self):
+        try:
+            import chess
+            board = chess.Board()
+            for san in self.match_moves:
+                try:
+                    board.push_san(san)
+                except Exception:
+                    pass
+            fen = board.fen()
+            self.master.clipboard_clear()
+            self.master.clipboard_append(fen)
+            logger.info("Copied FEN to clipboard: %s", fen)
+            if hasattr(self, "copy_fen_button"):
+                self._set_temp_button_feedback(self.copy_fen_button, "COPIED!")
+        except Exception as e:
+            logger.debug("Copy FEN failed: %s", e)
+
+    def _set_temp_button_feedback(self, btn, text):
+        try:
+            orig = btn["text"]
+            btn["text"] = text
+            self.master.after(1500, lambda: btn.configure(text=orig) if btn.winfo_exists() else None)
+        except Exception:
+            pass
+
+    def _on_tree_context_menu(self, event):
+        try:
+            menu = tk.Menu(self.master, tearoff=0)
+            menu.add_command(label="Copy Current FEN", command=self.on_copy_fen_button_listener)
+            menu.add_command(label="Copy Full PGN", command=self.on_copy_pgn_button_listener)
+            selected = self.tree.selection()
+            if selected:
+                item = self.tree.item(selected[0])
+                vals = item.get("values", [])
+                if len(vals) >= 3:
+                    menu.add_separator()
+                    if vals[1]:
+                        menu.add_command(label=f"Copy White Move: {vals[1]}", command=lambda: self._copy_text(str(vals[1])))
+                    if vals[2]:
+                        menu.add_command(label=f"Copy Black Move: {vals[2]}", command=lambda: self._copy_text(str(vals[2])))
+            menu.tk_popup(event.x_root, event.y_root)
+        except Exception as e:
+            logger.debug("tree context menu error: %s", e)
+
+    def _copy_text(self, text):
+        try:
+            self.master.clipboard_clear()
+            self.master.clipboard_append(text)
+        except Exception:
+            pass
+
+    def update_telemetry(self, nps=0, depth=0, time_per_move_ms=0.0, connection_health="Connected", last_error=""):
+        try:
+            if hasattr(self, "nps_text"):
+                nps_display = f"{nps/1000:.0f}k" if nps >= 1000 else (str(nps) if nps > 0 else "—")
+                self.nps_text.configure(text=nps_display)
+            if hasattr(self, "depth_reached_text"):
+                d_display = f"d={depth}" if depth > 0 else "—"
+                self.depth_reached_text.configure(text=d_display)
+            if hasattr(self, "move_time_text"):
+                t_display = f"{time_per_move_ms:.0f}ms" if time_per_move_ms > 0 else "—"
+                self.move_time_text.configure(text=t_display)
+            if hasattr(self, "conn_health_text"):
+                self.conn_health_text.configure(text=connection_health.upper(), fg=SUCCESS if "connect" in connection_health.lower() or "health" in connection_health.lower() or "stable" in connection_health.lower() else WARNING)
+            if last_error and hasattr(self, "last_error_text"):
+                self.last_error_text.configure(text=last_error, fg=DANGER)
+        except Exception as e:
+            logger.debug("update_telemetry error: %s", e)
+
+    def on_overlay_opacity_change(self, *a):
+        try:
+            val = float(self.overlay_opacity.get())
+            if self._overlay_queue is not None:
+                self._overlay_queue.put({"overlay_opacity": val})
+            self._schedule_save()
+        except Exception as e:
+            logger.debug("on_overlay_opacity_change error: %s", e)
+
+    def on_overlay_side_toggle(self, *a):
+        try:
+            side = str(self.overlay_eval_side.get())
+            if self._overlay_queue is not None:
+                self._overlay_queue.put({"eval_bar_side": side})
+            self._schedule_save()
+        except Exception as e:
+            logger.debug("on_overlay_side_toggle error: %s", e)
+
+    def toggle_overlay(self, *a):
+        try:
+            if self._overlay_queue is not None:
+                self._overlay_queue.put({"overlay_toggle": True})
+            logger.info("Toggled overlay visibility")
+        except Exception as e:
+            logger.debug("toggle_overlay error: %s", e)
 
     def on_manual_mode_checkbox_listener(self):
         try:

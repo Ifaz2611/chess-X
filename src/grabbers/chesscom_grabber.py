@@ -733,6 +733,27 @@ class ChesscomGrabber(Grabber):
         logger.debug("click_game_next: no button found on chess.com")
         return False
 
+    def get_clocks(self) -> tuple[str, str]:
+        """Extract clocks from chess.com UI: (white_clock, black_clock)."""
+        try:
+            js = """
+            try {
+                var timers = document.querySelectorAll('.clock-component, .clock-time-monospace, [data-cy="clock"], .player-timer');
+                if (timers.length >= 2) {
+                    return [timers[0].innerText.trim(), timers[1].innerText.trim()];
+                }
+            } catch(e) {}
+            return [];
+            """
+            res = self.chrome.execute_script(js)
+            if res and len(res) >= 2:
+                is_w = self.is_white()
+                bot_clk, opp_clk = str(res[1]), str(res[0])
+                return (bot_clk, opp_clk) if is_w else (opp_clk, bot_clk)
+        except Exception:
+            pass
+        return "", ""
+
     def make_mouseless_move(self, move, move_count):
         """Chess.com background move (parity with Lichess WS injection).
 
