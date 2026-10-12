@@ -10,6 +10,11 @@ import threading
 import time
 from typing import Any
 
+# Ensure src directory is in sys.path for direct module imports
+_src_dir = os.path.dirname(os.path.abspath(__file__))
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
+
 # Re-export color constants for backward compatibility (controls.py, eval_panel.py)
 BG_BASE = "#F4F1EA"
 BG_CARD = "#FFFFFF"
@@ -821,7 +826,8 @@ class GUI(QMainWindow):
         modes_card.addWidget(self.manual_mode_frame)
         self.manual_mode_frame.hide()
 
-        self.mouseless_mode_checkbox = QCheckBox("Mouseless mode (Lichess only)")
+        self.mouseless_mode_checkbox = QCheckBox("Mouseless mode (fast, recommended)")
+        self.mouseless_mode_checkbox.setToolTip("Instant JS move injection – no mouse movement, works on chess.com & lichess. Falls back to mouse if it fails.")
         self.mouseless_mode_checkbox.toggled.connect(lambda c: self.enable_mouseless_mode.set(c))
         modes_card.addWidget(self.mouseless_mode_checkbox)
 
@@ -844,8 +850,11 @@ class GUI(QMainWindow):
         lat_box.addLayout(lat_header)
 
         self.mouse_latency_slider = QSlider(Qt.Orientation.Horizontal)
-        self.mouse_latency_slider.setRange(0, 150)  # 0.0 to 15.0 step 0.1
+        # 0.0–1.0s is the sane range; anything higher only slows moves.
+        # Configs with legacy >1.0s values still load (clamped at move time).
+        self.mouse_latency_slider.setRange(0, 10)  # 0.0 to 1.0 step 0.1
         self.mouse_latency_slider.setValue(0)
+        self.mouse_latency_slider.setToolTip("Pause before mouse drag. Keep at 0.0–0.1s. Higher = slower play (clamped to 0.5s). For fastest play use Mouseless mode.")
         self.mouse_latency_slider.valueChanged.connect(self._on_mouse_latency_slider)
         lat_box.addWidget(self.mouse_latency_slider)
         modes_card.addLayout(lat_box)
@@ -1256,9 +1265,11 @@ class GUI(QMainWindow):
 
     def _save_config(self):
         try:
+            from config_store import CONFIG_VERSION
             from config_store import Config as _Cfg
             from config_store import save_config as _save
-            kw: dict = {}
+            kw: dict = dict(getattr(self, "_config", {}) or {})
+            kw["version"] = CONFIG_VERSION
             kw["stockfish_path"] = getattr(self, "stockfish_path", "") or ""
             kw["website"] = self.website.get() if hasattr(self, "website") else "chesscom"
             kw["browser"] = self.browser.get() if hasattr(self, "browser") else "chrome"
@@ -1276,6 +1287,8 @@ class GUI(QMainWindow):
             kw["theme"] = str(self.theme.get()) if hasattr(self, "theme") else getattr(self, "current_theme", "dark")
             cfg = _Cfg.from_dict(kw)
             _save(cfg, self._config_path())
+            if hasattr(self, "_config") and isinstance(self._config, dict):
+                self._config.update(cfg.to_dict())
         except Exception as e:
             logger.debug("save config error: %s", e)
 
@@ -1300,6 +1313,9 @@ class GUI(QMainWindow):
             self.matches_checkbox.setChecked(bool(cfg["enable_non_stop_matches"]))
         if "mouse_latency" in cfg:
             lat = float(cfg["mouse_latency"])
+            if lat > 1.0:
+                logger.warning("Legacy mouse_latency %.1fs clamped to 1.0s (was slowing every move)", lat)
+                lat = 1.0
             self.mouse_latency.set(lat)
             self.mouse_latency_slider.setValue(int(lat * 10))
             self.lbl_mouse_latency.setText(f"{lat:.1f}s")
@@ -1321,6 +1337,8 @@ class GUI(QMainWindow):
             tm = int(cfg["enable_topmost"])
             self.enable_topmost.set(tm)
             self.topmost_check.setChecked(bool(tm))
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(tm))
+
         if "overlay_opacity" in cfg:
             op = float(cfg["overlay_opacity"])
             self.overlay_opacity.set(op)
@@ -1364,6 +1382,9 @@ class GUI(QMainWindow):
         pass
 
     def _validate_inputs(self, *a):
+        if self.running:
+            self.start_button.setEnabled(True)
+            return
         can_start = bool(self.opened_browser and self.stockfish_path and os.path.exists(self.stockfish_path))
         self.start_button.setEnabled(can_start)
 
@@ -1479,14 +1500,10 @@ class GUI(QMainWindow):
                         pass
                     return
                 elif isinstance(data, proto.MsgSingleMove):
-                    self.match_moves.append(data.san)
                     self.insert_move(data.san, eval_str=data.eval_str, clock=data.clock, is_blunder=data.is_blunder)
-                    self._move_count.setText(f"{len(self.match_moves)} moves")
                     return
                 elif isinstance(data, proto.MsgMultiMove):
-                    self.match_moves += data.sans
                     self.set_moves(data.sans, evals=data.evals, clocks=data.clocks, blunders=data.blunders)
-                    self._move_count.setText(f"{len(self.match_moves)} moves")
                     return
                 elif isinstance(data, proto.MsgEval):
                     self.update_evaluation_display(data.eval_str, data.wdl_str, data.material_str, data.bot_acc, data.opponent_acc)
@@ -1513,18 +1530,17 @@ class GUI(QMainWindow):
                     self.start_button.setEnabled(True)
                 elif data.startswith("RESTART"):
                     self.restart_after_stopping = True
-                    try: self.stockfish_bot_pipe.send(proto.MsgDelete())
-                    except Exception: pass
+                    try:
+                        self.stockfish_bot_pipe.send(proto.MsgDelete())
+                    except Exception:
+                        pass
                 elif data.startswith("S_MOVE"):
                     m = data[6:]
-                    self.match_moves.append(m)
                     self.insert_move(m)
-                    self._move_count.setText(f"{len(self.match_moves)} moves")
                 elif data.startswith("M_MOVE"):
                     moves = [m for m in data[6:].split(",") if m]
-                    self.match_moves += moves
                     self.set_moves(moves)
-                    self._move_count.setText(f"{len(self.match_moves)} moves")
+
                 elif data.startswith("EVAL|"):
                     parts = data.split("|")
                     if len(parts) >= 6:
@@ -1721,18 +1737,36 @@ class GUI(QMainWindow):
     # --- Move Table Operations ---
     def clear_tree(self):
         self.tree.setRowCount(0)
+        self.match_moves = []
         self._move_count.setText("0 moves")
 
     def insert_move(self, move: str, eval_str="", clock="", is_blunder=False):
         row_cnt = self.tree.rowCount()
-        # Even total moves -> White's move creates new row
-        if len(self.match_moves) % 2 == 1:
-            move_num = (len(self.match_moves) + 1) // 2
+        if row_cnt == 0:
+            total_moves_in_tree = 0
+        else:
+            black_cell = self.tree.item(row_cnt - 1, 2)
+            has_black = black_cell is not None and bool(black_cell.text().strip())
+            total_moves_in_tree = (row_cnt - 1) * 2 + (2 if has_black else 1)
+
+        is_white = (total_moves_in_tree % 2 == 0)
+
+        tip_parts = []
+        if eval_str:
+            tip_parts.append(f"Eval: {eval_str}")
+        if clock:
+            tip_parts.append(f"Clock: {clock}")
+        tooltip = " | ".join(tip_parts)
+
+        if is_white:
+            move_num = (total_moves_in_tree // 2) + 1
             self.tree.insertRow(row_cnt)
             num_item = QTableWidgetItem(f"{move_num}.")
             num_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             white_item = QTableWidgetItem(move)
             white_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if tooltip:
+                white_item.setToolTip(tooltip)
             if is_blunder or "??" in move:
                 white_item.setForeground(QBrush(QColor("#EF4444")))
                 f = white_item.font()
@@ -1742,16 +1776,21 @@ class GUI(QMainWindow):
             self.tree.setItem(row_cnt, 1, white_item)
             self.tree.setItem(row_cnt, 2, QTableWidgetItem(""))
         else:
-            # Black's move fills existing row
-            if row_cnt > 0:
-                black_item = QTableWidgetItem(move)
-                black_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if is_blunder or "??" in move:
-                    black_item.setForeground(QBrush(QColor("#EF4444")))
-                    f = black_item.font()
-                    f.setBold(True)
-                    black_item.setFont(f)
-                self.tree.setItem(row_cnt - 1, 2, black_item)
+            black_item = QTableWidgetItem(move)
+            black_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if tooltip:
+                black_item.setToolTip(tooltip)
+            if is_blunder or "??" in move:
+                black_item.setForeground(QBrush(QColor("#EF4444")))
+                f = black_item.font()
+                f.setBold(True)
+                black_item.setFont(f)
+            self.tree.setItem(row_cnt - 1, 2, black_item)
+
+        if len(self.match_moves) <= total_moves_in_tree:
+            self.match_moves.append(move)
+
+        self._move_count.setText(f"{len(self.match_moves)} moves")
         self.tree.scrollToBottom()
 
     def set_moves(self, moves: list[str], evals=None, clocks=None, blunders=None):
@@ -1759,7 +1798,8 @@ class GUI(QMainWindow):
         for idx, m in enumerate(moves):
             blunder = blunders[idx] if blunders and idx < len(blunders) else False
             ev = evals[idx] if evals and idx < len(evals) else ""
-            self.insert_move(m, eval_str=ev, is_blunder=blunder)
+            clk = clocks[idx] if clocks and idx < len(clocks) else ""
+            self.insert_move(m, eval_str=ev, clock=clk, is_blunder=blunder)
 
     def _on_table_context_menu(self, pos: QPoint):
         menu = QMenu(self)
@@ -1769,6 +1809,14 @@ class GUI(QMainWindow):
         act_pgn.triggered.connect(self.on_copy_pgn_button_listener)
         act_exp = menu.addAction("Export PGN File")
         act_exp.triggered.connect(self.on_export_pgn_button_listener)
+
+        item = self.tree.itemAt(pos)
+        if item and item.column() in (1, 2) and item.text().strip():
+            menu.addSeparator()
+            txt = item.text().strip()
+            act_copy = menu.addAction(f"Copy Move: {txt}")
+            act_copy.triggered.connect(lambda _, t=txt: QGuiApplication.clipboard().setText(t))
+
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def on_copy_fen_button_listener(self):
@@ -1776,8 +1824,11 @@ class GUI(QMainWindow):
             import chess
             board = chess.Board()
             for m in self.match_moves:
-                try: board.push_san(m)
-                except Exception: pass
+                try:
+                    clean = m.rstrip("?!").strip()
+                    board.push_san(clean)
+                except Exception:
+                    pass
             QGuiApplication.clipboard().setText(board.fen())
             self._set_temp_button_feedback(self.copy_fen_button, "COPIED!")
         except Exception as e:
@@ -1803,7 +1854,16 @@ class GUI(QMainWindow):
             logger.debug("export pgn error: %s", e)
 
     def _build_pgn_text(self) -> str:
-        lines = ["[Event \"Casual Game\"]", f"[Date \"{datetime.datetime.now().strftime('%Y.%m.%d')}\"]", ""]
+        lines = [
+            "[Event \"Casual Game\"]",
+            "[Site \"Chess-X\"]",
+            f"[Date \"{datetime.datetime.now().strftime('%Y.%m.%d')}\"]",
+            "[Round \"1\"]",
+            "[White \"White\"]",
+            "[Black \"Black\"]",
+            "[Result \"*\"]",
+            "",
+        ]
         moves_str = []
         for i in range(0, len(self.match_moves), 2):
             w = self.match_moves[i]
@@ -1813,9 +1873,18 @@ class GUI(QMainWindow):
         return "\n".join(lines)
 
     def _set_temp_button_feedback(self, btn: QPushButton, text: str):
-        orig = btn.text()
-        btn.setText(text)
-        QTimer.singleShot(1500, lambda: btn.setText(orig))
+        try:
+            orig = btn.text()
+            btn.setText(text)
+            def _restore():
+                try:
+                    btn.setText(orig)
+                except Exception:
+                    pass
+            QTimer.singleShot(1500, _restore)
+        except Exception:
+            pass
+
 
     # --- Overlay Controls ---
     def on_overlay_opacity_change(self, *a):
@@ -1844,7 +1913,7 @@ class GUI(QMainWindow):
         if hasattr(self, "manual_mode_frame"):
             self.manual_mode_frame.setVisible(val)
 
-    def on_topmost_check_button_listener(self):
+    def on_topmost_check_button_listener(self, *a):
         tm = bool(self.enable_topmost.get())
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, tm)
         self.show()
@@ -1893,14 +1962,31 @@ class GUI(QMainWindow):
         self._save_config()
         self.on_stop_button_listener()
 
+        if hasattr(self, "_hotkey_manager") and self._hotkey_manager:
+            try:
+                self._hotkey_manager.stop()
+            except Exception:
+                pass
+
+        if hasattr(self, "tray_icon") and self.tray_icon is not None:
+            try:
+                self.tray_icon.hide()
+            except Exception:
+                pass
+
         if getattr(self, "_browser_manager", None) is not None:
-            try: self._browser_manager.close()
-            except Exception: pass
+            try:
+                self._browser_manager.close()
+            except Exception:
+                pass
             self.chrome = None
         elif self.chrome is not None:
-            try: self.chrome.quit()
-            except Exception: pass
+            try:
+                self.chrome.quit()
+            except Exception:
+                pass
             self.chrome = None
+
 
     def on_close_listener(self):
         self._cleanup()

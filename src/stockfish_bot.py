@@ -41,7 +41,17 @@ class StockfishBot(multiprocess.Process):
         self.enable_mouseless_mode = enable_mouseless_mode
         self.enable_non_stop_puzzles = enable_non_stop_puzzles
         self.enable_non_stop_matches = enable_non_stop_matches
-        self.mouse_latency = mouse_latency
+        # Clamp: a stale 5s+ config must never stall every move (see MoveExecutor).
+        try:
+            _lat = float(mouse_latency)
+        except Exception:
+            _lat = 0.0
+        if _lat < 0.0:
+            _lat = 0.0
+        if _lat > 0.5:
+            logger.warning("mouse_latency %.2fs clamped to 0.50s", _lat)
+            _lat = 0.5
+        self.mouse_latency = _lat
         self.slow_mover = slow_mover
         self.skill_level = skill_level
         self.stockfish_depth = stockfish_depth
@@ -304,12 +314,24 @@ class StockfishBot(multiprocess.Process):
                 self.white_cp_losses = self._engine_service.white_cp_losses
                 self.black_cp_losses = self._engine_service.black_cp_losses
                 self._prev_eval_cp = self._engine_service._prev_eval_cp
+                # Cache the fresh eval for send_eval_data reuse (avoids a
+                # second back-to-back get_evaluation UCI round-trip).
+                try:
+                    self._last_eval_data = stockfish.get_evaluation()
+                    self._last_eval_ts = time.time()
+                except Exception:
+                    pass
                 return
             except Exception:
                 pass
         """Call after a move has been pushed and stockfish position updated. Compares prev cp to current."""
         try:
             cur_eval = stockfish.get_evaluation()
+            try:
+                self._last_eval_data = cur_eval
+                self._last_eval_ts = time.time()
+            except Exception:
+                pass
             if not cur_eval or "value" not in cur_eval:
                 return
             cur_cp = self._eval_to_white_cp(cur_eval)
@@ -397,9 +419,16 @@ class StockfishBot(multiprocess.Process):
             except Exception:
                 pass
         start_pos, end_pos = self.get_move_pos(move)
-        pyautogui.moveTo(start_pos[0], start_pos[1])
-        time.sleep(self.mouse_latency)
-        pyautogui.dragTo(end_pos[0], end_pos[1])
+        try:
+            pyautogui.moveTo(start_pos[0], start_pos[1], duration=0.0)
+        except TypeError:
+            pyautogui.moveTo(start_pos[0], start_pos[1])
+        if self.mouse_latency > 0:
+            time.sleep(self.mouse_latency)
+        try:
+            pyautogui.dragTo(end_pos[0], end_pos[1], duration=0.0)
+        except TypeError:
+            pyautogui.dragTo(end_pos[0], end_pos[1])
         # Promotion: handle all 4 piece types for both colors correctly
         if len(move) == 5:
             time.sleep(0.04)
@@ -1186,7 +1215,10 @@ class StockfishBot(multiprocess.Process):
                             time.sleep(0.15)
                             continue
 
-                    time.sleep(0.04)
+                    # 80ms poll: full move-list scrape costs ~100ms+ of
+                    # WebDriver round-trips; tighter polling only queues up
+                    # and makes detection *slower*, not faster.
+                    time.sleep(0.08)
 
                 # New-game / takeback / same-length resync paths break out with
                 # the board already matching move_list (len <= previous len):
@@ -1217,18 +1249,10 @@ class StockfishBot(multiprocess.Process):
                             logger.debug("make_moves_from_current_position (opponent) failed: %s", e)
                             stockfish.set_position([m.uci() for m in board.move_stack])
                         self._record_cp_loss(stockfish, mover_is_white)
-                    try:
-                        # FAST: 50ms is enough for accuracy tracking, avoids 300ms stall per opponent move
-                        best_move = stockfish.get_best_move_time(50)
-                    except Exception as e:
-                        logger.debug("get_best_move_time failed: %s", e)
-                        best_move = None
-                    if best_move and last_mover_is_white is not None:
-                        if last_mover_is_white:
-                            white_best_moves.append(best_move)
-                        else:
-                            black_best_moves.append(best_move)
-                    # P1: record cp loss for opponent move (done per-move above)
+                    # NOTE: no extra engine search here – the old
+                    # get_best_move_time(50) purely for fallback accuracy
+                    # cost 50ms+ per opponent move and contended with the
+                    # real search. cp-loss accuracy (above) supersedes it.
                     self.send_eval_data(stockfish, board, white_moves, white_best_moves, black_moves, black_best_moves)
                     _w_clk, _b_clk = ("", "")
                     try:
@@ -1326,11 +1350,29 @@ class StockfishBot(multiprocess.Process):
 
     def send_eval_data(self, stockfish, board, white_moves=None, white_best_moves=None, black_moves=None, black_best_moves=None):
         try:
+            # Reuse the eval just fetched by _record_cp_loss (<1.5s old) –
+            # saves one blocking UCI round-trip per move.
+            eval_data = None
             try:
-                eval_data = stockfish.get_evaluation()
-            except Exception as e:
-                logger.debug("get_evaluation failed: %s", e)
+                _ts = getattr(self, "_last_eval_ts", 0) or 0
+                _cached = getattr(self, "_last_eval_data", None)
+                if isinstance(_cached, dict) and "value" in _cached and (time.time() - _ts) < 1.5:
+                    eval_data = _cached
+            except Exception:
                 eval_data = None
+            if eval_data is None:
+                try:
+                    eval_data = stockfish.get_evaluation()
+                except Exception as e:
+                    logger.debug("get_evaluation failed: %s", e)
+                    eval_data = None
+            else:
+                logger.debug("send_eval_data: reusing cached eval")
+            try:
+                self._last_eval_data = eval_data
+                self._last_eval_ts = time.time()
+            except Exception:
+                pass
             # stockfish 5.2.0 can return {} or None if position not yet evaluated / game over
             if not eval_data or not isinstance(eval_data, dict) or "type" not in eval_data or "value" not in eval_data:
                 logger.debug("get_evaluation returned empty/invalid: %r – using 0", eval_data)
@@ -1345,11 +1387,28 @@ class StockfishBot(multiprocess.Process):
             player_perspective_eval_value = eval_value
             if not self.is_white:
                 player_perspective_eval_value = -eval_value
+            # WDL is display-only – cache for 2s to avoid a second blocking
+            # UCI call on every move (it cost ~50-150ms per update).
+            wdl_stats = None
             try:
-                wdl_stats = stockfish.get_wdl_stats()
-            except Exception as e:
-                logger.debug("get_wdl_stats exception: %s", e)
-                wdl_stats = [0, 0, 0]
+                _wts = getattr(self, "_last_wdl_ts", 0) or 0
+                _wc = getattr(self, "_last_wdl", None)
+                if isinstance(_wc, (list, tuple)) and len(_wc) == 3 and (time.time() - _wts) < 2.0:
+                    wdl_stats = list(_wc)
+                    logger.debug("send_eval_data: reusing cached WDL")
+            except Exception:
+                wdl_stats = None
+            if wdl_stats is None:
+                try:
+                    wdl_stats = stockfish.get_wdl_stats()
+                except Exception as e:
+                    logger.debug("get_wdl_stats exception: %s", e)
+                    wdl_stats = [0, 0, 0]
+                try:
+                    self._last_wdl = list(wdl_stats) if isinstance(wdl_stats, (list, tuple)) else [0, 0, 0]
+                    self._last_wdl_ts = time.time()
+                except Exception:
+                    pass
             # get_wdl_stats returns None when game is over (mate) – handle gracefully
             if wdl_stats is None:
                 logger.debug("get_wdl_stats returned None (game over) – using 0/0/0")

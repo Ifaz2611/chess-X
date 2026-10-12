@@ -8,10 +8,23 @@ logger = get_logger("move_executor")
 
 
 class MoveExecutor:
+    #: Hard cap for the pre-drag pause. A misconfigured 5s+ latency
+    #: (seen in the wild) stalls every move; mouse path never needs >0.5s.
+    MAX_LATENCY_SEC = 0.5
+
     def __init__(self, grabber, is_white: bool | None, mouse_latency: float, input_backend=None):
         self.grabber = grabber
         self.is_white = is_white
-        self.mouse_latency = mouse_latency
+        try:
+            lat = float(mouse_latency)
+        except Exception:
+            lat = 0.0
+        if lat < 0.0:
+            lat = 0.0
+        if lat > self.MAX_LATENCY_SEC:
+            logger.warning("mouse_latency %.2fs clamped to %.2fs – fix config", lat, self.MAX_LATENCY_SEC)
+            lat = self.MAX_LATENCY_SEC
+        self.mouse_latency = lat
         # Allow injection for tests; otherwise auto-detect
         if input_backend is not None:
             self._backend = input_backend
@@ -85,22 +98,28 @@ class MoveExecutor:
         backend = self._get_backend()
         start_pos, end_pos = self.get_move_pos(move)
         try:
+            backend.moveTo(start_pos[0], start_pos[1], duration=0.0)
+        except TypeError:
             backend.moveTo(start_pos[0], start_pos[1])
         except Exception as e:
             logger.debug("backend moveTo failed, trying pyautogui fallback: %s", e)
             try:
                 import pyautogui
-                pyautogui.moveTo(start_pos[0], start_pos[1])
+                pyautogui.moveTo(start_pos[0], start_pos[1], duration=0.0)
             except Exception:
                 pass
-        time.sleep(self.mouse_latency)
+        if self.mouse_latency > 0:
+            time.sleep(self.mouse_latency)
         try:
-            backend.dragTo(end_pos[0], end_pos[1])
+            try:
+                backend.dragTo(end_pos[0], end_pos[1], duration=0.0)
+            except TypeError:
+                backend.dragTo(end_pos[0], end_pos[1])
         except Exception as e:
             logger.debug("backend dragTo failed, trying pyautogui fallback: %s", e)
             try:
                 import pyautogui
-                pyautogui.dragTo(end_pos[0], end_pos[1])
+                pyautogui.dragTo(end_pos[0], end_pos[1], duration=0.0)
             except Exception:
                 pass
         if len(move) == 5:

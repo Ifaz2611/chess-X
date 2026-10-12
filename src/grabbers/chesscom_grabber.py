@@ -312,8 +312,66 @@ class ChesscomGrabber(Grabber):
         self.moves_list = {}
         self._consecutive_bad_parses = 0
 
+    def _js_extract_moves(self) -> list | None:
+        """Single-round-trip JS scrape of chess.com move nodes.
+
+        Returns a validated SAN list, [] for an empty game, or None when
+        the DOM snapshot is corrupt/unavailable (caller keeps last-good
+        cache). One execute_script replaces ~80 WebDriver round-trips of
+        the element-by-element path below (~10ms vs ~200ms+ per poll).
+        """
+        try:
+            rows = self.chrome.execute_script(
+                "const nodes = Array.from(document.querySelectorAll('div.node[data-node]'));"
+                "return nodes.map(n => {"
+                "  let fig = null;"
+                "  try { const f = n.querySelector('[data-figurine]');"
+                "    if (f) fig = f.getAttribute('data-figurine'); } catch(e) {}"
+                "  let t = ''; try { t = (n.innerText || n.textContent || '').trim(); } catch(e) {}"
+                "  return [fig, t];"
+                "});"
+            )
+        except Exception as e:
+            logger.debug("_js_extract_moves script failed: %s", e)
+            return None
+        if not isinstance(rows, (list, tuple)):
+            return None
+        if len(rows) == 0:
+            return []
+        dom_sans: list[str] = []
+        for row in rows:
+            try:
+                fig, text = (list(row) + [None, ""])[:2]
+            except Exception:
+                continue
+            try:
+                if text and self.normalize_result_text(str(text)) is not None:
+                    continue
+                san = self._decode_chesscom_san(fig, str(text or ""))
+                if san:
+                    dom_sans.append(san)
+            except Exception:
+                continue
+        validated = self._validate_san_sequence(dom_sans)
+        if validated is None:
+            if len(dom_sans) == 0:
+                return []
+            return None  # corrupt snapshot – keep last-good cache
+        return list(validated)
+
     def get_move_list(self):
         """Resilient move list scraping with stale retry + exponential backoff + fallback selectors."""
+        # FAST PATH: one JS round-trip first (validates before accepting).
+        # Falls through to the element-by-element path only when JS is
+        # unavailable or the snapshot is transiently corrupt.
+        try:
+            js_moves = self._js_extract_moves()
+            if js_moves is not None:
+                self.moves_list = {str(i): s for i, s in enumerate(js_moves)}
+                self._consecutive_bad_parses = 0
+                return list(js_moves)
+        except Exception as e:
+            logger.debug("_js_extract_moves fast path failed: %s", e)
         for attempt in range(3):
             try:
                 # Find moves list container with fallback

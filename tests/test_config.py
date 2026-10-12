@@ -75,3 +75,46 @@ def test_config_defaults_when_missing(tmp_path):
     assert loaded["website"] == "chesscom"
     assert loaded["skill_level"] == 20
     assert loaded["slow_mover"] == 60
+
+
+def test_gui_save_preserves_custom_and_unmapped_fields(tmp_path):
+    cfg_path = tmp_path / "config.json"
+    initial_data = {
+        "version": 3,
+        "website": "chesscom",
+        "calibration_offset_x": 14.5,
+        "calibration_offset_y": -3.5,
+        "opening_book_path": "/path/to/book.bin",
+        "syzygy_path": "/path/to/syzygy",
+    }
+    with open(cfg_path, "w") as f:
+        json.dump(initial_data, f)
+
+    from gui import GUI
+    class Dummy:
+        def _is_valid_stockfish(self, p, quick_check=True): return True
+        def _config_path(self): return str(cfg_path)
+
+    import types
+    dummy = Dummy()
+    dummy._load_config = types.MethodType(GUI._load_config, dummy)
+    dummy._save_config = types.MethodType(GUI._save_config, dummy)
+    dummy._config = dummy._load_config()
+
+    class Var:
+        def __init__(self, v): self._v = v
+        def get(self): return self._v
+        def set(self, v): self._v = v
+
+    dummy.website = Var("lichess")
+    dummy._save_config()
+
+    with open(cfg_path) as f:
+        saved = json.load(f)
+
+    assert saved["website"] == "lichess"
+    assert saved["calibration_offset_x"] == 14.5
+    assert saved["calibration_offset_y"] == -3.5
+    assert saved["opening_book_path"] == "/path/to/book.bin"
+    assert saved["syzygy_path"] == "/path/to/syzygy"
+    assert saved["version"] == 3

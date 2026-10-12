@@ -265,6 +265,27 @@ def test_gui_modern_theme_and_system_tray():
     assert gui.tree.rowCount() == 1
     assert gui.tree.item(0, 2).text() == "e5??"
 
+    # Batch moves and MsgMultiMove
+    gui.set_moves(["d4", "d5", "c4"])
+    assert gui.tree.rowCount() == 2
+    assert gui.tree.item(0, 1).text() == "d4"
+    assert gui.tree.item(0, 2).text() == "d5"
+    assert gui.tree.item(1, 1).text() == "c4"
+    assert gui.tree.item(1, 2).text() == ""
+    assert len(gui.match_moves) == 3
+
+    # Copy FEN with blunder notation
+    gui.set_moves(["e4", "e5??"])
+    gui.on_copy_fen_button_listener()
+    from PyQt6.QtGui import QGuiApplication
+    fen = QGuiApplication.clipboard().text()
+    assert "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR" in fen
+
+    # Copy PGN headers
+    pgn = gui._build_pgn_text()
+    assert '[Result "*"]' in pgn
+    assert "1. e4 e5??" in pgn
+
     # Eval and telemetry updates
     gui.update_evaluation_display("+1.25", "45/35/20", "+2", "95.0%", "82.0%")
     assert gui.eval_text.text() == "+1.25"
@@ -277,3 +298,4 @@ def test_gui_modern_theme_and_system_tray():
     # Clean shutdown
     gui._cleanup()
     gui.close()
+
