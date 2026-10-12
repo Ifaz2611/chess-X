@@ -244,11 +244,11 @@ def test_gui_modern_theme_and_system_tray():
     # Theme switching
     gui.set_theme("dark")
     assert gui.current_theme == "dark"
-    assert "🌙 Dark" in gui.btn_theme.text()
+    assert "Dark" in gui.btn_theme.text()
 
     gui.toggle_theme()
     assert gui.current_theme == "light"
-    assert "☀️ Light" in gui.btn_theme.text()
+    assert "Light" in gui.btn_theme.text()
 
     # System tray existence
     assert hasattr(gui, "tray_icon")

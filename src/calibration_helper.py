@@ -293,7 +293,7 @@ class CalibrationHelperDialog(QDialog):
             if self.gui and hasattr(self.gui, "grabber") and self.gui.grabber:
                 self.gui.grabber.set_calibration_offset(dx, dy)
 
-            self.lbl_status.setText("✓ Offsets saved to config!")
+            self.lbl_status.setText("Offsets saved to config!")
             logger.info("Saved calibration offsets: dx=%s, dy=%s", dx, dy)
         except Exception as e:
             logger.error("Failed to save calibration: %s", e)

@@ -672,13 +672,13 @@ class GUI(QMainWindow):
         right_box.setSpacing(10)
 
         # Theme toggle button
-        self.btn_theme = QPushButton("🌙 Dark")
+        self.btn_theme = QPushButton("Dark")
         self.btn_theme.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_theme.clicked.connect(self.toggle_theme)
         right_box.addWidget(self.btn_theme)
 
         # Calibration button
-        self.btn_calib = QPushButton("🎯 Calibrate")
+        self.btn_calib = QPushButton("Calibrate")
         self.btn_calib.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_calib.clicked.connect(self.open_calibration_helper)
         right_box.addWidget(self.btn_calib)
@@ -1058,7 +1058,7 @@ class GUI(QMainWindow):
         layout.addWidget(lbl_warn)
         layout.addStretch()
 
-        self.emergency_kill_button = QPushButton("☠  KILL BOT + BROWSER (Esc / F12)")
+        self.emergency_kill_button = QPushButton("KILL BOT + BROWSER (Esc / F12)")
         self.emergency_kill_button.setObjectName("DangerButton")
         self.emergency_kill_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.emergency_kill_button.clicked.connect(self.emergency_kill)
@@ -1575,7 +1575,7 @@ class GUI(QMainWindow):
             self.opening_browser = bm.opening_browser
             self.opened_browser = bm.opened_browser
             self.after(0, lambda: (
-                self.open_browser_button.setText("✓  BROWSER OPEN"),
+                self.open_browser_button.setText("BROWSER OPEN"),
                 self.open_browser_button.setEnabled(False),
                 self._validate_inputs(),
             ))

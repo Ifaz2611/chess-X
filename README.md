@@ -101,13 +101,13 @@ Tkinter panel, global hotkeys, PGN export, and live accuracy / WDL / material tr
 
 ```mermaid
 flowchart LR
-    GUI["🎛 Tkinter GUI<br/><code>src/gui.py</code>"]
+    GUI["Tkinter GUI<br/><code>src/gui.py</code>"]
     BROWSER["ChromeDriver<br/>Selenium 4.9 + webdriver-manager"]
     GRAB["Grabbers<br/>chesscom / lichess DOM"]
     ENGINE["python-chess + Stockfish<br/><code>stockfish_bot.py</code>"]
-    ACT["🖱 PyAutoGUI / WS Inject<br/>moveTo → dragTo"]
-    BOARD["♟ Browser Board"]
-    OVL["👁 PyQt6 Overlay<br/>arrow + eval bar"]
+    ACT["PyAutoGUI / WS Inject<br/>moveTo → dragTo"]
+    BOARD["Browser Board"]
+    OVL["PyQt6 Overlay<br/>arrow + eval bar"]
 
     GUI --> BROWSER --> GRAB --> ENGINE --> ACT --> BOARD
     ENGINE -. "Queue / Pipe" .-> OVL
@@ -130,27 +130,27 @@ flowchart LR
 
 | Category | Feature | chess.com | lichess.org | Notes |
 |---|---|:-:|:-:|---|
-| **Platform** | Windows / Linux | ✅ | ✅ | macOS untested |
-| **Opponents** | vs Human (online) | ✅ | ✅ | *Not permitted — see disclaimer* |
-| | vs Bots | ✅ | ✅ | |
-| **Puzzles** | Auto‑solve + non‑stop | ❌ | ✅ | `Non-stop puzzles` |
-| **Modes** | Manual (hold `3`) | ✅ | ✅ | Shows arrow, waits for key |
-| | Mouseless (background) | ❌ | ✅ | WebSocket injection, works minimized |
-| | Non‑stop online matches | ❌ | ✅ | Auto‑clicks `New opponent` |
-| **Tuning** | Mouse latency `0–15s` | ✅ | ✅ | `0.2s` steps |
-| | Skill `0–20` | ✅ | ✅ | Stockfish `Skill Level` |
-| | Depth `1–20` | ✅ | ✅ | Search depth |
-| | Slow Mover `10–1000` | ✅ | ✅ | Default `100` |
+| **Platform** | Windows / Linux | Yes | Yes | macOS untested |
+| **Opponents** | vs Human (online) | Yes | Yes | *Not permitted — see disclaimer* |
+| | vs Bots | Yes | Yes | |
+| **Puzzles** | Auto‑solve + non‑stop | No | Yes | `Non-stop puzzles` |
+| **Modes** | Manual (hold `3`) | Yes | Yes | Shows arrow, waits for key |
+| | Mouseless (background) | No | Yes | WebSocket injection, works minimized |
+| | Non‑stop online matches | No | Yes | Auto‑clicks `New opponent` |
+| **Tuning** | Mouse latency `0–15s` | Yes | Yes | `0.2s` steps |
+| | Skill `0–20` | Yes | Yes | Stockfish `Skill Level` |
+| | Depth `1–20` | Yes | Yes | Search depth |
+| | Slow Mover `10–1000` | Yes | Yes | Default `100` |
 | | Hash / Threads | Auto | Auto | Auto‑managed |
-| **Analytics** | PGN export | ✅ | ✅ | `Export PGN` |
-| | Live eval (cp / mate) | ✅ | ✅ | GUI + overlay bar |
-| | W/D/L % | ✅ | ✅ | `get_wdl_stats()` |
-| | Material count | ✅ | ✅ | `+3` / `-2` / `0` |
-| | Accuracy tracking | ✅ | ✅ | Bot vs opponent |
-| **UI** | Eval bar overlay | ✅ | ✅ | Sigmoid‑scaled |
-| | Best‑move arrow | ✅ | ✅ | Red translucent polygon |
-| | Move list treeview | ✅ | ✅ | Auto‑scroll |
-| | Always on top | ✅ | ✅ | Toggleable |
+| **Analytics** | PGN export | Yes | Yes | `Export PGN` |
+| | Live eval (cp / mate) | Yes | Yes | GUI + overlay bar |
+| | W/D/L % | Yes | Yes | `get_wdl_stats()` |
+| | Material count | Yes | Yes | `+3` / `-2` / `0` |
+| | Accuracy tracking | Yes | Yes | Bot vs opponent |
+| **UI** | Eval bar overlay | Yes | Yes | Sigmoid‑scaled |
+| | Best‑move arrow | Yes | Yes | Red translucent polygon |
+| | Move list treeview | Yes | Yes | Auto‑scroll |
+| | Always on top | Yes | Yes | Toggleable |
 
 ---
 
@@ -347,7 +347,7 @@ flowchart LR
 
 | Control | Type | Default | Description |
 |---|---|---|---|
-| `Status` | label | `Inactive` 🔴 | `Running` 🟢 when the bot loop is active |
+| `Status` | label | `Inactive` | `Running` when the bot loop is active |
 | `Eval / WDL / Material / Bot Acc / Opponent Acc` | labels | `-` | Live from `send_eval_data()`, updated each half‑move |
 | `Chess.com` / `Lichess.org` | radio | `chesscom` | Selects the grabber class |
 | `Open Browser` | button | — | Spawns ChromeDriver; disables afterwards |
@@ -384,7 +384,7 @@ flowchart LR
 
 ---
 
-## ⌨Keyboard Shortcuts
+## Keyboard Shortcuts
 
 <div align="center">
 
@@ -582,10 +582,10 @@ Use it only against **computer opponents**, in **unrated analysis**, on **puzzle
 
 <br />
 
-**Found it useful? Drop a ⭐ — and please play fair.**
+**Found it useful? Please play fair.**
 
 <br />
 
-<sub>Built with ♟ and Python.</sub>
+<sub>Built with Python.</sub>
 
 </div>
