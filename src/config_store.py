@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,9 @@ DEFAULTS: dict[str, Any] = {
     "overlay_opacity": 1.0,
     "overlay_eval_side": "left",
     "overlay_visible": True,
+    "theme": "dark",
+    "calibration_offset_x": 0.0,
+    "calibration_offset_y": 0.0,
 }
 
 # Fields that are not part of current schema but were present in old configs
@@ -71,6 +74,9 @@ class Config:
     overlay_opacity: float = 1.0
     overlay_eval_side: str = "left"
     overlay_visible: bool = True
+    theme: str = "dark"
+    calibration_offset_x: float = 0.0
+    calibration_offset_y: float = 0.0
 
     @classmethod
     def defaults(cls) -> Config:
@@ -209,6 +215,19 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
         out["overlay_visible"] = bool(out.get("overlay_visible", True))
     except Exception:
         out["overlay_visible"] = True
+    try:
+        t = str(out.get("theme", "dark")).lower().strip()
+        out["theme"] = "light" if t == "light" else "dark"
+    except Exception:
+        out["theme"] = "dark"
+    try:
+        out["calibration_offset_x"] = max(-500.0, min(500.0, float(out.get("calibration_offset_x", 0.0))))
+    except Exception:
+        out["calibration_offset_x"] = 0.0
+    try:
+        out["calibration_offset_y"] = max(-500.0, min(500.0, float(out.get("calibration_offset_y", 0.0))))
+    except Exception:
+        out["calibration_offset_y"] = 0.0
     out["version"] = CONFIG_VERSION
     return out
 

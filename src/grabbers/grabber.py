@@ -3,15 +3,17 @@ import time
 from abc import ABC, abstractmethod
 
 from selenium.common.exceptions import (
-    StaleElementReferenceException,
     NoSuchElementException,
+    StaleElementReferenceException,
     WebDriverException,
 )
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
-from utilities import attach_to_session, get_logger, retry_on_stale, find_element_with_fallback, wait_for_any_element
+from utilities import (
+    attach_to_session,
+    find_element_with_fallback,
+    get_logger,
+    wait_for_any_element,
+)
 
 logger = get_logger("grabber")
 
@@ -67,6 +69,15 @@ class Grabber(ABC):
         self._board_elem = None
         self.moves_list = {}
         self.browser = browser or "chrome"
+        self.calibration_offset_x = 0.0
+        self.calibration_offset_y = 0.0
+        try:
+            from config_store import load_config
+            cfg = load_config()
+            self.calibration_offset_x = float(getattr(cfg, "calibration_offset_x", 0.0) or 0.0)
+            self.calibration_offset_y = float(getattr(cfg, "calibration_offset_y", 0.0) or 0.0)
+        except Exception:
+            pass
 
     def get_board(self):
         return self._board_elem
@@ -75,21 +86,119 @@ class Grabber(ABC):
         """Reset the moves list when a new game starts"""
         self.moves_list = {}
 
+    def set_calibration_offset(self, x: float, y: float):
+        """Set manual or calibrated pixel offset adjustment."""
+        self.calibration_offset_x = float(x)
+        self.calibration_offset_y = float(y)
+
+    def get_calibration_offset(self) -> tuple[float, float]:
+        """Return the currently configured (dx, dy) calibration offset."""
+        return getattr(self, "calibration_offset_x", 0.0), getattr(self, "calibration_offset_y", 0.0)
+
+    def get_viewport_metrics(self) -> dict:
+        """Query detailed window, screen, and viewport metrics from the browser.
+        
+        Returns a dict containing screen coordinates, inner/outer dimensions,
+        per-monitor devicePixelRatio, maximized detection, and frame borders.
+        """
+        js_code = (
+            "const dpr = window.devicePixelRatio || 1.0;\n"
+            "const sx = (window.screenX !== undefined) ? window.screenX : (window.screenLeft || 0);\n"
+            "const sy = (window.screenY !== undefined) ? window.screenY : (window.screenTop || 0);\n"
+            "const ow = window.outerWidth || 0;\n"
+            "const oh = window.outerHeight || 0;\n"
+            "const iw = window.innerWidth || ow;\n"
+            "const ih = window.innerHeight || oh;\n"
+            "const scrollX = window.scrollX || window.pageXOffset || 0;\n"
+            "const scrollY = window.scrollY || window.pageYOffset || 0;\n"
+            "const scr = window.screen || {};\n"
+            "const screenW = scr.width || 0;\n"
+            "const screenH = scr.height || 0;\n"
+            "const availW = scr.availWidth || screenW;\n"
+            "const availH = scr.availHeight || screenH;\n"
+            "const availLeft = scr.availLeft || 0;\n"
+            "const availTop = scr.availTop || 0;\n"
+            "const isFullscreen = !!document.fullscreenElement;\n"
+            "const isMaximized = !isFullscreen && (\n"
+            "    (Math.abs(ow - availW) <= 25 && Math.abs(oh - availH) <= 25) ||\n"
+            "    (Math.abs(ow - screenW) <= 25 && Math.abs(oh - screenH) <= 25)\n"
+            ");\n"
+            "const horizDiff = ow - iw;\n"
+            "const vertDiff = oh - ih;\n"
+            "let borderLeft = 0;\n"
+            "let borderBottom = 0;\n"
+            "let topChrome = 0;\n"
+            "if (isMaximized || isFullscreen) {\n"
+            "    borderLeft = 0;\n"
+            "    borderBottom = 0;\n"
+            "    topChrome = vertDiff > 0 ? vertDiff : 0;\n"
+            "} else {\n"
+            "    borderLeft = (horizDiff > 0) ? (horizDiff / 2.0) : 0;\n"
+            "    borderBottom = borderLeft;\n"
+            "    topChrome = vertDiff - borderBottom;\n"
+            "    if (topChrome < 0) topChrome = vertDiff;\n"
+            "}\n"
+            "return {\n"
+            "    screenX: sx,\n"
+            "    screenY: sy,\n"
+            "    outerWidth: ow,\n"
+            "    outerHeight: oh,\n"
+            "    innerWidth: iw,\n"
+            "    innerHeight: ih,\n"
+            "    scrollX: scrollX,\n"
+            "    scrollY: scrollY,\n"
+            "    devicePixelRatio: dpr,\n"
+            "    isMaximized: isMaximized,\n"
+            "    isFullscreen: isFullscreen,\n"
+            "    borderLeft: borderLeft,\n"
+            "    borderBottom: borderBottom,\n"
+            "    topChrome: topChrome,\n"
+            "    screenWidth: screenW,\n"
+            "    screenHeight: screenH,\n"
+            "    availWidth: availW,\n"
+            "    availHeight: availH,\n"
+            "    availLeft: availLeft,\n"
+            "    availTop: availTop\n"
+            "};"
+        )
+        return self.chrome.execute_script(js_code)
+
     def get_top_left_corner(self):
-        """Returns the coordinates of the top left corner of the Chrome window, resilient to stale/disconnect."""
+        """Returns the coordinates of the top left corner of the browser viewport.
+        
+        Resilient across:
+        - Multi-monitor setups with secondary screen coordinates
+        - Per-monitor DPI scaling and fractional DPI (e.g. 125%, 150%)
+        - Non-maximized browser windows (compensating for bottom frame borders)
+        - Sub-pixel scroll offsets
+        - Fine-tune calibration offsets
+        """
         for attempt in range(2):
             try:
-                canvas_x_offset = self.chrome.execute_script(
-                    "return window.screenX + (window.outerWidth - window.innerWidth) / 2 - window.scrollX;"
-                )
-                canvas_y_offset = self.chrome.execute_script(
-                    "return window.screenY + (window.outerHeight - window.innerHeight) - window.scrollY;"
-                )
-                return canvas_x_offset, canvas_y_offset
+                metrics = self.get_viewport_metrics()
+                if isinstance(metrics, dict):
+                    sx = float(metrics.get("screenX", 0) or 0)
+                    sy = float(metrics.get("screenY", 0) or 0)
+                    bl = float(metrics.get("borderLeft", 0) or 0)
+                    tc = float(metrics.get("topChrome", 0) or 0)
+                    scx = float(metrics.get("scrollX", 0) or 0)
+                    scy = float(metrics.get("scrollY", 0) or 0)
+                    cal_x = float(getattr(self, "calibration_offset_x", 0.0) or 0.0)
+                    cal_y = float(getattr(self, "calibration_offset_y", 0.0) or 0.0)
+                    canvas_x_offset = sx + bl - scx + cal_x
+                    canvas_y_offset = sy + tc - scy + cal_y
+                    return canvas_x_offset, canvas_y_offset
+                elif isinstance(metrics, (tuple, list)) and len(metrics) >= 2:
+                    cal_x = float(getattr(self, "calibration_offset_x", 0.0) or 0.0)
+                    cal_y = float(getattr(self, "calibration_offset_y", 0.0) or 0.0)
+                    return float(metrics[0]) + cal_x, float(metrics[1]) + cal_y
             except (StaleElementReferenceException, WebDriverException) as e:
                 logger.debug("get_top_left_corner attempt %d failed: %s", attempt, e)
                 time.sleep(0.05 * (2 ** attempt))
-        # Fallback to 0,0 – better than crashing
+            except Exception as e:
+                logger.debug("get_top_left_corner unexpected attempt %d: %s", attempt, e)
+                time.sleep(0.05)
+        # Fallback to (0, 0) - better than crashing
         logger.warning("get_top_left_corner failed after retries, returning (0,0)")
         return 0, 0
 

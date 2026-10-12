@@ -1,9 +1,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Literal, Union, List, Dict, Any, Optional
-import queue  # for type hints
+from dataclasses import dataclass
+from typing import Any, Literal, Union
 
 # ---------- Pipe: Bot -> GUI ----------
 
@@ -34,11 +33,11 @@ class MsgSingleMove:
 @dataclass(frozen=True)
 class MsgMultiMove:
     """Bulk move list (e.g., initial sync)."""
-    sans: List[str]
+    sans: list[str]
     kind: Literal["M_MOVE"] = "M_MOVE"
-    evals: Optional[List[str]] = None
-    clocks: Optional[List[str]] = None
-    blunders: Optional[List[bool]] = None
+    evals: list[str] | None = None
+    clocks: list[str] | None = None
+    blunders: list[bool] | None = None
 
 @dataclass(frozen=True)
 class MsgEval:
@@ -84,7 +83,7 @@ PipeMessage = Union[BotToGuiMessage, GuiToBotMessage, str]  # str for legacy fal
 @dataclass(frozen=True)
 class OverlayArrows:
     """Arrow polygons for overlay: list of ((x1,y1),(x2,y2)). Empty list clears."""
-    arrows: List[Any]  # List[Tuple[Tuple[int,int], Tuple[int,int]]]
+    arrows: list[Any]  # List[Tuple[Tuple[int,int], Tuple[int,int]]]
     kind: Literal["ARROWS"] = "ARROWS"
 
 @dataclass(frozen=True)
@@ -92,8 +91,8 @@ class OverlayEval:
     """Eval bar update."""
     eval_value: float  # centipawns / 100 or mate value
     eval_type: str     # "cp" or "mate"
-    board_position: Optional[Dict[str, Any]] = None  # {x,y,width,height}
-    is_white: Optional[bool] = None
+    board_position: dict[str, Any] | None = None  # {x,y,width,height}
+    is_white: bool | None = None
     kind: Literal["OVERLAY_EVAL"] = "OVERLAY_EVAL"
 
 @dataclass(frozen=True)
@@ -111,17 +110,25 @@ class OverlayLines:
 @dataclass(frozen=True)
 class OverlayConfig:
     """Config update for overlay process: opacity, side ('left'|'right'), visibility."""
-    opacity: Optional[float] = None
-    side: Optional[str] = None
-    visible: Optional[bool] = None
+    opacity: float | None = None
+    side: str | None = None
+    visible: bool | None = None
     kind: Literal["OVERLAY_CONFIG"] = "OVERLAY_CONFIG"
+
+@dataclass(frozen=True)
+class OverlayCalibration:
+    """Config update for overlay calibration mode / test targets."""
+    active: bool = True
+    board_position: dict[str, Any] | None = None
+    is_white: bool | None = None
+    kind: Literal["OVERLAY_CALIBRATION"] = "OVERLAY_CALIBRATION"
 
 @dataclass(frozen=True)
 class OverlayClear:
     """Clear overlay arrows."""
     kind: Literal["CLEAR"] = "CLEAR"
 
-OverlayMessage = Union[OverlayArrows, OverlayEval, OverlayLines, OverlayConfig, OverlayClear, List[Any], Dict[str, Any]]  # legacy list/dict fallback
+OverlayMessage = Union[OverlayArrows, OverlayEval, OverlayLines, OverlayConfig, OverlayCalibration, OverlayClear, list[Any], dict[str, Any]]  # legacy list/dict fallback
 
 
 # ---------- Serialization for legacy string protocol ----------
@@ -199,7 +206,7 @@ def overlay_to_legacy(msg: OverlayMessage) -> Any:
     if isinstance(msg, OverlayClear):
         return []
     if isinstance(msg, OverlayEval):
-        d: Dict[str, Any] = {"eval": msg.eval_value, "eval_type": msg.eval_type}
+        d: dict[str, Any] = {"eval": msg.eval_value, "eval_type": msg.eval_type}
         if msg.board_position is not None:
             d["board_position"] = msg.board_position
         if msg.is_white is not None:
@@ -226,6 +233,12 @@ def legacy_to_overlay_msg(obj: Any) -> OverlayMessage:
     if isinstance(obj, dict) and "pv_lines" in obj:
         return OverlayLines(lines=list(obj.get("pv_lines") or []),
                             threat_uci=obj.get("threat_uci") or "")
-    if isinstance(obj, (OverlayArrows, OverlayEval, OverlayLines, OverlayClear)):
+    if isinstance(obj, dict) and "calibration_active" in obj:
+        return OverlayCalibration(
+            active=bool(obj.get("calibration_active", True)),
+            board_position=obj.get("board_position"),
+            is_white=obj.get("is_white"),
+        )
+    if isinstance(obj, (OverlayArrows, OverlayEval, OverlayLines, OverlayConfig, OverlayCalibration, OverlayClear)):
         return obj
     return obj

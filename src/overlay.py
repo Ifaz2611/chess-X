@@ -1,11 +1,12 @@
-import math
-import sys
-import os
-import threading
 import logging
+import math
+import os
 import platform
-from PyQt6.QtCore import Qt, QPoint, QRect
-from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QGuiApplication, QPolygon, QFont
+import sys
+import threading
+
+from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtGui import QBrush, QColor, QFont, QGuiApplication, QPainter, QPen, QPolygon
 from PyQt6.QtWidgets import QApplication, QWidget
 
 try:
@@ -37,21 +38,26 @@ class OverlayScreen(QWidget):
         super().__init__()
         self.stockfish_queue = stockfish_queue
 
-        # Platform-aware window setup
-        self.screen = QGuiApplication.screens()[0] if QGuiApplication.screens() else None
-        if self.screen is not None:
-            # Handle macOS retina: size is in device pixels, but coords from move_executor are logical
-            dpr = _get_dpr()
-            w = self.screen.size().width()
-            h = self.screen.size().height()
-            # On macOS retina, Qt reports size in device pixels; we keep as is for overlay canvas
-            self.setFixedWidth(w)
-            self.setFixedHeight(h)
-            logger.info("Overlay screen %dx%d DPR=%s Wayland=%s macOS=%s", w, h, dpr, _is_wayland(), _is_macos())
+        # Multi-monitor & DPI-aware virtual geometry setup
+        screens = QGuiApplication.screens()
+        self._virtual_origin = (0, 0)
+        self.screen = screens[0] if screens else None
+        if screens:
+            primary = QGuiApplication.primaryScreen() or screens[0]
+            v_geom = primary.virtualGeometry() if hasattr(primary, "virtualGeometry") else None
+            if v_geom and not v_geom.isEmpty():
+                self.setGeometry(v_geom)
+                self._virtual_origin = (v_geom.x(), v_geom.y())
+                logger.info("Overlay virtual desktop: %dx%d origin=(%d,%d) screens=%d",
+                            v_geom.width(), v_geom.height(), v_geom.x(), v_geom.y(), len(screens))
+            else:
+                s_geom = primary.geometry()
+                self.setGeometry(s_geom)
+                self._virtual_origin = (s_geom.x(), s_geom.y())
         else:
-            # Fallback if no screen yet (offscreen tests)
             self.setFixedWidth(1920)
             self.setFixedHeight(1080)
+            self._virtual_origin = (0, 0)
 
         # Transparent + click-through + always-on-top
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -122,8 +128,8 @@ class OverlayScreen(QWidget):
         self.eval_bar_y = (self.height() - self.eval_bar_height) // 2  # Default y position
         self.eval_bar_margin = 15  # Margin between board and eval bar
 
-        # Retina-aware scaling for arrow coords (if DPR != 1, incoming coords are logical, overlay is device)
-        # We store DPR and scale incoming arrow coords to device pixels for correct placement
+        # Calibration helper mode
+        self.calibration_active = False
         self._dpr = _get_dpr() if self.screen else 1.0
 
         # Start the message queue thread (daemon so overlay can exit cleanly)
@@ -211,6 +217,15 @@ class OverlayScreen(QWidget):
                     ucis = [entry.get("uci", "") for entry in (message.lines or []) if isinstance(entry, dict)]
                     self.set_pv_lines([u for u in ucis if u], message.threat_uci or "")
                     continue
+                if isinstance(message, proto.OverlayCalibration):
+                    self.calibration_active = bool(message.active)
+                    if message.board_position is not None:
+                        self.board_position = message.board_position
+                        self.update_eval_bar_position()
+                    if message.is_white is not None:
+                        self.is_white = message.is_white
+                    self.update()
+                    continue
             except Exception:
                 pass
             if isinstance(message, list):
@@ -223,6 +238,14 @@ class OverlayScreen(QWidget):
                     self.set_pv_lines([u for u in ucis if u], message.get("threat_uci") or "")
                 except Exception:
                     pass
+            elif isinstance(message, dict) and "calibration_active" in message:
+                self.calibration_active = bool(message.get("calibration_active", True))
+                if "board_position" in message:
+                    self.board_position = message["board_position"]
+                    self.update_eval_bar_position()
+                if "is_white" in message:
+                    self.is_white = message["is_white"]
+                self.update()
             elif isinstance(message, dict) and "eval" in message:
                 # Evaluation data (legacy)
                 eval_value = message["eval"]
@@ -241,24 +264,22 @@ class OverlayScreen(QWidget):
     
     def update_eval_bar_position(self):
         """
-        Update the evaluation bar position based on the chess board position
+        Update the evaluation bar position based on the chess board position,
+        translated into local widget coordinates for multi-monitor setups.
         """
         if not self.board_position:
             return
             
+        vx, vy = getattr(self, "_virtual_origin", (0, 0))
         # Position the eval bar to either left or right of the board with margin
         if getattr(self, "eval_bar_side", "left") == "right":
-            self.eval_bar_x = self.board_position['x'] + self.board_position['width'] + self.eval_bar_margin
+            self.eval_bar_x = int(self.board_position['x'] + self.board_position['width'] + self.eval_bar_margin - vx)
         else:
-            self.eval_bar_x = self.board_position['x'] - self.eval_bar_width - self.eval_bar_margin
+            self.eval_bar_x = int(self.board_position['x'] - self.eval_bar_width - self.eval_bar_margin - vx)
         
         # Make the eval bar the exact same height as the board
-        self.eval_bar_height = self.board_position['height']
-        self.eval_bar_y = self.board_position['y']
-        
-        # Make the eval bar the exact same height as the board
-        self.eval_bar_height = self.board_position['height']
-        self.eval_bar_y = self.board_position['y']
+        self.eval_bar_height = int(self.board_position['height'])
+        self.eval_bar_y = int(self.board_position['y'] - vy)
             
     def update_eval_bar(self, eval_value, eval_type="cp"):
         """
@@ -281,30 +302,20 @@ class OverlayScreen(QWidget):
 
     def set_arrows(self, arrows):
         """
-        This function is used to set the arrows to be drawn on the screen
-        Args:
-            arrows: A list of tuples containing the start and end position of the arrows
-            in the form of ((start_point, end_point), (start_point, end_point))
-        Returns:
-            None
+        Set arrows to be drawn on screen, translated by virtual desktop origin.
         """
-
         self.arrows = []
+        vx, vy = getattr(self, "_virtual_origin", (0, 0))
         for arrow in arrows:
             try:
-                dpr = getattr(self, "_dpr", 1.0) or 1.0
-                if dpr != 1.0:
-                    # Scale logical -> device
-                    s = arrow[0]
-                    e = arrow[1]
-                    arrow = ((int(s[0]*dpr), int(s[1]*dpr)), (int(e[0]*dpr), int(e[1]*dpr)))
-            except Exception:
-                pass
-            poly = self.get_arrow_polygon(
-                QPoint(arrow[0][0], arrow[0][1]),
-                QPoint(arrow[1][0], arrow[1][1])
-            )
-            self.arrows.append(poly)
+                s = arrow[0]
+                e = arrow[1]
+                p1 = QPoint(int(s[0] - vx), int(s[1] - vy))
+                p2 = QPoint(int(e[0] - vx), int(e[1] - vy))
+                poly = self.get_arrow_polygon(p1, p2)
+                self.arrows.append(poly)
+            except Exception as ex:
+                logger.debug("set_arrows conversion error: %s", ex)
         self.update()
 
     # -- PV / threat lines (engine analysis) --
@@ -319,7 +330,7 @@ class OverlayScreen(QWidget):
         self.update()
 
     def _square_center(self, sq: str):
-        """Pixel center of a square like 'e4' using board_position/is_white."""
+        """Pixel center of a square like 'e4' using board_position/is_white in widget coords."""
         if not self.board_position:
             return None
         try:
@@ -331,9 +342,9 @@ class OverlayScreen(QWidget):
             sq_h = self.board_position["height"] / 8.0
             col = f if self.is_white else 7 - f
             row = (7 - r) if self.is_white else r
-            dpr = getattr(self, "_dpr", 1.0) or 1.0
-            x = (self.board_position["x"] + col * sq_w + sq_w / 2) * dpr
-            y = (self.board_position["y"] + row * sq_h + sq_h / 2) * dpr
+            vx, vy = getattr(self, "_virtual_origin", (0, 0))
+            x = (self.board_position["x"] + col * sq_w + sq_w / 2) - vx
+            y = (self.board_position["y"] + row * sq_h + sq_h / 2) - vy
             return QPoint(int(x), int(y))
         except Exception:
             return None
@@ -384,8 +395,54 @@ class OverlayScreen(QWidget):
         if self.eval_bar_visible:
             self.draw_eval_bar(painter)
 
+        # Draw calibration alignment pattern if active
+        if getattr(self, "calibration_active", False) and self.board_position:
+            try:
+                self.draw_calibration_targets(painter)
+            except Exception as e:
+                logger.debug("calibration paint error: %s", e)
+
         painter.end()
-    
+
+    def draw_calibration_targets(self, painter: QPainter):
+        """Draw high-visibility alignment crosshairs and markers for calibration."""
+        if not self.board_position:
+            return
+        vx, vy = getattr(self, "_virtual_origin", (0, 0))
+        bx = self.board_position["x"] - vx
+        by = self.board_position["y"] - vy
+        bw = self.board_position["width"]
+        bh = self.board_position["height"]
+
+        # Outer board boundary (dashed cyan)
+        painter.setPen(QPen(QColor(0, 220, 255, 220), 2, Qt.PenStyle.DashLine))
+        painter.setBrush(QBrush(QColor(0, 220, 255, 25)))
+        painter.drawRect(QRect(int(bx), int(by), int(bw), int(bh)))
+
+        # Crosshair helper
+        def draw_crosshair(cx, cy, color, size=18, label=""):
+            painter.setPen(QPen(color, 2))
+            painter.drawLine(int(cx - size), int(cy), int(cx + size), int(cy))
+            painter.drawLine(int(cx), int(cy - size), int(cx), int(cy + size))
+            if label:
+                painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+                painter.setPen(QPen(color, 1))
+                painter.drawText(int(cx + 6), int(cy - 6), label)
+
+        # 4 Corners
+        draw_crosshair(bx, by, QColor(255, 60, 60, 255), label="TL (a8/h1)")
+        draw_crosshair(bx + bw, by, QColor(60, 160, 255, 255), label="TR")
+        draw_crosshair(bx, by + bh, QColor(60, 160, 255, 255), label="BL")
+        draw_crosshair(bx + bw, by + bh, QColor(60, 160, 255, 255), label="BR")
+
+        # Square centers e2, e4
+        e2 = self._square_center("e2")
+        if e2:
+            draw_crosshair(e2.x(), e2.y(), QColor(60, 255, 80, 255), label="e2")
+        e4 = self._square_center("e4")
+        if e4:
+            draw_crosshair(e4.x(), e4.y(), QColor(60, 255, 80, 255), label="e4")
+
     def draw_eval_bar(self, painter):
         """
         Draw the evaluation bar on the screen
